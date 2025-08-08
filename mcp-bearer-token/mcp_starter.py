@@ -354,15 +354,39 @@ async def menu_intelligence(
 ) -> dict:
     import base64
     import io
-    import cv2
-    import numpy as np
-    import pytesseract
     from PIL import Image
     
     try:
+        # Try to import OCR dependencies (graceful fallback if not installed)
+        try:
+            import cv2
+            import numpy as np
+            import pytesseract
+            
+            # Configure tesseract path if specified in environment
+            tesseract_cmd = os.environ.get("TESSERACT_CMD")
+            if tesseract_cmd:
+                pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+            
+            ocr_available = True
+        except ImportError:
+            ocr_available = False
+        
         # Decode base64 image
         image_bytes = base64.b64decode(menu_image_base64)
         image = Image.open(io.BytesIO(image_bytes))
+        
+        if not ocr_available:
+            return ok({
+                "language": language,
+                "error": "OCR dependencies not installed. Run: pip install pytesseract opencv-python numpy",
+                "setup_instructions": "See OCR_SETUP.md for full installation guide",
+                "extracted_text": "OCR not available",
+                "recommendations": ["Install OCR dependencies to analyze menu text"],
+                "allergen_warnings": ["Unable to detect allergens without OCR"],
+                "etiquette": ["Consider using translation app as backup"],
+                "translation": "OCR dependencies required for text extraction"
+            })
         
         # Convert PIL image to OpenCV format for preprocessing
         cv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
