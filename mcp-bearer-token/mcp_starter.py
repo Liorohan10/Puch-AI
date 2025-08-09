@@ -21,9 +21,19 @@ load_dotenv()
 
 TOKEN = os.environ.get("AUTH_TOKEN")
 MY_NUMBER = os.environ.get("MY_NUMBER")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 assert TOKEN is not None, "Please set AUTH_TOKEN in your .env file"
 assert MY_NUMBER is not None, "Please set MY_NUMBER in your .env file"
+
+# Debug: Print environment variable status
+print(f"🔑 AUTH_TOKEN loaded: {'✅' if TOKEN else '❌'}")
+print(f"📱 MY_NUMBER loaded: {'✅' if MY_NUMBER else '❌'}")
+print(f"🤖 GEMINI_API_KEY loaded: {'✅' if GEMINI_API_KEY else '❌'}")
+if GEMINI_API_KEY:
+    print(f"🔑 API Key starts with: {GEMINI_API_KEY[:10]}...")
+else:
+    print("⚠️ WARNING: GEMINI_API_KEY not found - menu intelligence will use fallback OCR only")
 
 # --- Auth Provider ---
 class SimpleBearerAuthProvider(BearerAuthProvider):
@@ -242,15 +252,17 @@ async def emergency_phrase_generator(
 ## Removed: contextual_visual_storytelling (not needed)
 
 MENU_INTEL_DESCRIPTION = RichToolDescription(
-    description="Menu Intelligence: analyze a menu photo for allergens, recommendations, and etiquette.",
-    use_when="User shares a menu photo and dietary preferences.",
+    description="Advanced Menu Intelligence & Local Cuisine Discovery: analyze menu photos with Gemini 2.0 Pro for allergens, recommendations, cultural insights, and discover must-try local dishes and restaurants worth visiting.",
+    use_when="User shares a menu photo, wants dining recommendations, or needs local cuisine discovery in any location.",
 )
 
 @mcp.tool(description=MENU_INTEL_DESCRIPTION.model_dump_json())
 async def menu_intelligence(
-    menu_image_base64: Annotated[str, Field(description="Base64-encoded image of the menu")],
+    menu_image_base64: Annotated[str | None, Field(description="Base64-encoded image of the menu (optional - can discover local cuisine without image)")]=None,
     allergies: Annotated[list[str] | None, Field(description="List of allergens to avoid")]=None,
-    preferences: Annotated[list[str] | None, Field(description="Cuisine/diet preferences, e.g., vegetarian, spicy")]=None,
+    preferences: Annotated[list[str] | None, Field(description="Cuisine/diet preferences, e.g., vegetarian, spicy, traditional")]=None,
+    location: Annotated[str | None, Field(description="City and country for local cuisine discovery (e.g., 'Tokyo, Japan')")]=None,
+    discovery_mode: Annotated[bool, Field(description="Enable local cuisine discovery and must-try dishes recommendations")]=False,
     language: Annotated[str | None, Field(description="Language for output")]="en",
 ) -> dict:
     import base64
@@ -259,8 +271,54 @@ async def menu_intelligence(
     import json
     from PIL import Image
     
-    async def extract_with_gemini(image_bytes, allergies, preferences):
-        """Extract menu information using Gemini Vision API"""
+    # Handle discovery mode - recommend local cuisine without menu image
+    if discovery_mode and location:
+        try:
+            cuisine_discovery, method = await discover_local_cuisine(location, allergies, preferences, language)
+            result = {
+                "mode": "cuisine_discovery",
+                "location": location,
+                "language": language,
+                "discovery_method": method,
+                **cuisine_discovery
+            }
+            
+            # Add practical travel tips
+            result["travel_tips"] = {
+                "best_dining_times": "Local peak dining hours and quiet periods",
+                "reservation_culture": "When and how to make reservations",
+                "payment_methods": "Accepted payment types and tipping customs",
+                "dress_code": "Appropriate attire for different restaurant types"
+            }
+            
+            track_tool_usage("menu_intelligence_discovery")
+            return ok(result)
+            
+        except Exception as discovery_error:
+            return ok({
+                "mode": "cuisine_discovery",
+                "location": location,
+                "error": f"Local cuisine discovery failed: {str(discovery_error)}",
+                "fallback_advice": [
+                    "Search for '[location] must try food' online",
+                    "Ask locals for restaurant recommendations", 
+                    "Visit local food markets for authentic experiences",
+                    "Look for restaurants with local customers"
+                ],
+                "success": False
+            })
+    
+    # Handle menu image analysis
+    if not menu_image_base64:
+        return ok({
+            "mode": "no_image_provided",
+            "error": "No menu image provided and discovery_mode not enabled",
+            "suggestion": "Provide a menu image or enable discovery_mode with location for local cuisine recommendations",
+            "success": False
+        })
+    
+    async def discover_local_cuisine(location, allergies, preferences, language):
+        """Discover local cuisine and must-try dishes using Gemini 2.0 Pro"""
         try:
             import google.generativeai as genai
             
@@ -268,69 +326,112 @@ async def menu_intelligence(
             if not api_key:
                 raise Exception("GEMINI_API_KEY not found in environment")
             
-            # Configure Gemini
+            # Configure Gemini Pro
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel('gemini-2.5-pro')
             
-            # Convert bytes to PIL Image
-            pil_image = Image.open(io.BytesIO(image_bytes))
-            
-            # Create comprehensive prompt for menu analysis
-            allergen_text = f"Allergies to check for: {', '.join(allergies)}" if allergies else "No specific allergies to check"
-            preference_text = f"Dietary preferences: {', '.join(preferences)}" if preferences else "No specific preferences"
+            # Create comprehensive prompt for local cuisine discovery
+            allergen_text = f"IMPORTANT - Avoid recommending dishes with: {', '.join(allergies)}" if allergies else "No specific allergies to avoid"
+            preference_text = f"User preferences: {', '.join(preferences)}" if preferences else "No specific preferences mentioned"
             
             prompt = f"""
-Analyze this menu image and extract information in the following JSON format:
+You are a world-renowned culinary expert and travel guide. Provide comprehensive local cuisine information for {location}.
+
+Return your response in the following JSON format:
 
 {{
-    "extracted_text": "Full text content from the menu",
-    "menu_items": [
+    "location": "{location}",
+    "cuisine_overview": {{
+        "cuisine_type": "name of local cuisine style",
+        "history": "brief culinary history and influences",
+        "characteristics": "what makes this cuisine unique"
+    }},
+    "must_try_dishes": [
         {{
-            "name": "dish name",
-            "price": "price if visible",
-            "description": "description if available",
-            "category": "appetizer/main/dessert/drink"
+            "name": "dish name in local language",
+            "english_name": "English translation if different",
+            "description": "what the dish is and how it's prepared",
+            "cultural_significance": "why this dish is important locally",
+            "taste_profile": "flavor description (spicy, sweet, umami, etc.)",
+            "price_range": "typical cost range in local currency",
+            "best_time_to_eat": "breakfast/lunch/dinner/snack",
+            "allergen_info": "potential allergens in this dish",
+            "vegetarian_friendly": true/false,
+            "spice_level": "mild/medium/hot/very hot"
         }}
     ],
-    "detected_prices": ["list of all prices found"],
-    "recommendations": [
-        "recommended items based on preferences with explanations"
+    "recommended_restaurants": [
+        {{
+            "name": "restaurant name",
+            "type": "street food/casual/fine dining/local institution",
+            "specialties": ["list of signature dishes"],
+            "atmosphere": "description of dining experience",
+            "price_range": "budget/moderate/expensive",
+            "local_popularity": "why locals love this place",
+            "tourist_friendly": true/false,
+            "reservations_needed": true/false
+        }}
     ],
-    "allergen_warnings": [
-        "specific allergen warnings based on menu content"
+    "food_districts": [
+        {{
+            "area_name": "district or street name",
+            "specialty": "what this area is known for",
+            "best_time_to_visit": "time recommendation",
+            "atmosphere": "what to expect"
+        }}
     ],
-    "cuisine_type": "type of cuisine (Italian, Chinese, etc.)",
-    "price_range": "budget/moderate/expensive",
-    "vegetarian_options": ["list of vegetarian dishes if any"],
-    "spicy_dishes": ["list of spicy dishes if any"]
+    "dining_etiquette": [
+        "important cultural dining rules and customs"
+    ],
+    "food_safety_tips": [
+        "practical advice for safe eating"
+    ],
+    "seasonal_specialties": [
+        {{
+            "season": "season name",
+            "dishes": ["seasonal dishes available"],
+            "festivals": "food-related festivals if any"
+        }}
+    ],
+    "budget_recommendations": {{
+        "street_food": "best budget options with price ranges",
+        "mid_range": "good value restaurants",
+        "splurge": "special occasion dining"
+    }},
+    "allergen_safe_options": [
+        "dishes that are safe for mentioned allergies"
+    ],
+    "preference_matches": [
+        "dishes that match user preferences"
+    ],
+    "language_help": {{
+        "key_phrases": {{
+            "ordering": "how to order in local language",
+            "dietary_restrictions": "how to communicate allergies/preferences",
+            "compliments": "how to compliment the food"
+        }},
+        "menu_terms": [
+            {{"local_term": "english_meaning"}}
+        ]
+    }}
 }}
 
 User Context:
 {allergen_text}
 {preference_text}
+Language for response: {language}
 
-Instructions:
-1. Extract ALL visible text from the menu
-2. Identify individual menu items with prices where visible
-3. Look for allergen ingredients in item descriptions
-4. Recommend items based on user preferences
-5. Categorize dishes appropriately
-6. Provide helpful warnings for allergies
-7. Be thorough but concise
-8. If text is unclear, indicate uncertainty
-
-Please analyze this menu image:
+Please provide authentic, culturally accurate information based on your knowledge of {location}'s culinary scene. Focus on dishes and places that locals actually recommend, not just tourist attractions.
 """
             
             # Generate response
-            response = model.generate_content([prompt, pil_image])
+            response = model.generate_content(prompt)
             
             if not response.text:
-                raise Exception("Gemini returned empty response")
+                raise Exception("Gemini returned empty response for cuisine discovery")
             
-            # Try to parse JSON response
+            # Parse JSON response
             try:
-                # Clean the response text (remove markdown code blocks if present)
                 clean_text = response.text.strip()
                 if clean_text.startswith('```json'):
                     clean_text = clean_text[7:]
@@ -339,23 +440,133 @@ Please analyze this menu image:
                 clean_text = clean_text.strip()
                 
                 result = json.loads(clean_text)
-                return result, "Gemini Vision API"
+                return result, "Gemini 2.0 Pro Cuisine Discovery"
                 
             except json.JSONDecodeError:
                 # If JSON parsing fails, create structured response from text
                 response_text = response.text
                 return {
-                    "extracted_text": response_text,
-                    "menu_items": [],
-                    "detected_prices": [],
-                    "recommendations": [response_text[:200] + "..."],
-                    "allergen_warnings": [],
-                    "cuisine_type": "Unknown",
-                    "price_range": "Unknown"
-                }, "Gemini Vision API (text mode)"
+                    "location": location,
+                    "cuisine_overview": {"cuisine_type": "Local Cuisine", "description": response_text[:300] + "..."},
+                    "must_try_dishes": [],
+                    "recommended_restaurants": [],
+                    "dining_etiquette": [response_text[:200] + "..."],
+                    "raw_response": response_text
+                }, "Gemini 2.0 Pro (text mode)"
                 
         except Exception as e:
-            raise Exception(f"Gemini API failed: {str(e)}")
+            raise Exception(f"Gemini cuisine discovery failed: {str(e)}")
+    
+    async def analyze_menu_with_gemini_pro(image_bytes, allergies, preferences, location):
+        """Enhanced menu analysis using Gemini Pro with safety settings"""
+        try:
+            import google.generativeai as genai
+            
+            api_key = os.environ.get("GEMINI_API_KEY")
+            if not api_key:
+                raise Exception("GEMINI_API_KEY not found in environment")
+            
+            # Configure Gemini Pro with safety settings
+            genai.configure(api_key=api_key)
+            
+            # Configure safety settings to be more permissive for food content
+            safety_settings = [
+                {
+                    "category": "HARM_CATEGORY_HARASSMENT",
+                    "threshold": "BLOCK_ONLY_HIGH"
+                },
+                {
+                    "category": "HARM_CATEGORY_HATE_SPEECH", 
+                    "threshold": "BLOCK_ONLY_HIGH"
+                },
+                {
+                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "threshold": "BLOCK_ONLY_HIGH"
+                },
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "threshold": "BLOCK_ONLY_HIGH"
+                }
+            ]
+            
+            model = genai.GenerativeModel(
+                'gemini-2.5-pro',
+                safety_settings=safety_settings
+            )
+            
+            # Convert bytes to PIL Image
+            pil_image = Image.open(io.BytesIO(image_bytes))
+            
+            # Create safe, neutral prompt for menu analysis
+            allergen_text = f"Please identify dishes containing: {', '.join(allergies)}" if allergies else "No specific dietary restrictions"
+            preference_text = f"User enjoys: {', '.join(preferences)}" if preferences else "No specific preferences"
+            location_context = f"Restaurant location: {location}" if location else "Location not specified"
+            
+            prompt = f"""
+Please analyze this restaurant menu image and provide information in JSON format. Focus on being helpful and informative about food options.
+
+Please return:
+{{
+    "menu_text": "text visible on the menu",
+    "dishes": [
+        {{
+            "name": "dish name",
+            "price": "price if shown", 
+            "description": "menu description",
+            "category": "appetizer/main/dessert/beverage",
+            "ingredients": ["main ingredients if listed"],
+            "dietary_notes": ["vegetarian/vegan/gluten-free if indicated"]
+        }}
+    ],
+    "cuisine_style": "type of cuisine",
+    "price_level": "budget/moderate/upscale",
+    "recommendations": [
+        "dishes that match user preferences"
+    ],
+    "dietary_considerations": [
+        "notes about allergens or dietary restrictions"
+    ]
+}}
+
+Context:
+{location_context}
+{allergen_text}  
+{preference_text}
+
+Please provide a helpful analysis focusing on the food offerings and dining information.
+"""
+            
+            # Generate response with safety settings
+            response = model.generate_content([prompt, pil_image])
+            
+            if not response.text:
+                raise Exception("Gemini returned empty response")
+            
+            # Parse JSON response
+            try:
+                clean_text = response.text.strip()
+                if clean_text.startswith('```json'):
+                    clean_text = clean_text[7:]
+                if clean_text.endswith('```'):
+                    clean_text = clean_text[:-3]
+                clean_text = clean_text.strip()
+                
+                result = json.loads(clean_text)
+                return result, "Gemini 2.5 Pro Menu Analysis"
+                
+            except json.JSONDecodeError:
+                # If JSON parsing fails, create structured response from text
+                response_text = response.text
+                return {
+                    "menu_text": response_text[:500] + "..." if len(response_text) > 500 else response_text,
+                    "dishes": [],
+                    "cuisine_style": "Unknown",
+                    "recommendations": ["See full analysis in menu_text"],
+                    "dietary_considerations": []
+                }, "Gemini 2.5 Pro (text mode)"
+                
+        except Exception as e:
+            raise Exception(f"Gemini Pro menu analysis failed: {str(e)}")
     
     async def extract_with_tesseract(image_bytes):
         """Fallback OCR using Tesseract with OpenCV preprocessing (lightweight)."""
@@ -399,6 +610,41 @@ Please analyze this menu image:
         except Exception as e:
             raise Exception(f"Tesseract OCR failed: {str(e)}")
     
+    async def extract_with_easyocr(image_bytes):
+        """Fallback OCR using EasyOCR"""
+        try:
+            import easyocr
+            import numpy as np
+            
+            # Convert to numpy array
+            pil_image = Image.open(io.BytesIO(image_bytes))
+            if pil_image.mode != 'RGB':
+                pil_image = pil_image.convert('RGB')
+            
+            img_array = np.array(pil_image)
+            
+            # Initialize EasyOCR
+            reader = easyocr.Reader(['en'])
+            results = reader.readtext(img_array, detail=0)
+            
+            extracted_text = "\n".join(results)
+            if not extracted_text.strip():
+                raise Exception("No text detected")
+            
+            return {
+                "extracted_text": extracted_text,
+                "menu_items": [],
+                "detected_prices": [],
+                "recommendations": ["Basic OCR text extraction - manual analysis needed"],
+                "allergen_warnings": [],
+                "cuisine_type": "Unknown",
+                "price_range": "Unknown"
+            }, "EasyOCR (fallback)"
+            
+        except Exception as e:
+            raise Exception(f"EasyOCR failed: {str(e)}")
+    
+    # Main processing logic starts here
     try:
         # Decode and validate image
         try:
@@ -416,59 +662,63 @@ Please analyze this menu image:
                 
         except Exception as decode_error:
             return ok({
+                "mode": "image_analysis",
                 "language": language,
                 "error": f"Failed to decode image: {str(decode_error)}",
-                "extracted_text": "Image decode failed",
-                "recommendations": ["Please check the image format and try again"],
-                "allergen_warnings": [],
-                "etiquette": ["Ask staff for menu assistance"],
-                "translation": "Image processing failed",
+                "suggestion": "Please check the image format and try again",
                 "success": False
             })
         
-        # Try Gemini first, then fallback to Tesseract OCR
-        result = {}
-        ocr_method = ""
-
+        # Enhanced Menu Analysis with Gemini 2.0 Pro
         try:
-            # Method 1: Gemini Vision API (best accuracy and intelligence)
-            result, ocr_method = await extract_with_gemini(image_bytes, allergies, preferences)
+            analysis_result, analysis_method = await analyze_menu_with_gemini_pro(image_bytes, allergies, preferences, location)
+            
+            # Add cultural dining context if location provided
+            if location and discovery_mode:
+                try:
+                    local_context, _ = await discover_local_cuisine(location, allergies, preferences, language)
+                    analysis_result["local_cuisine_context"] = {
+                        "regional_specialties": local_context.get("must_try_dishes", [])[:3],
+                        "local_dining_customs": local_context.get("dining_etiquette", [])[:3],
+                        "similar_local_dishes": "Dishes from this menu that match local cuisine"
+                    }
+                except Exception:
+                    pass  # Local context is optional
+            
+            # Prepare comprehensive result
+            final_result = {
+                "mode": "enhanced_menu_analysis",
+                "language": language,
+                "location": location or "Not specified",
+                "analysis_method": analysis_method,
+                "success": True,
+                **analysis_result
+            }
+            
+            # Add practical dining guidance
+            final_result["practical_guidance"] = {
+                "ordering_strategy": "How to order like a local",
+                "portion_planning": "How much to order for your group",
+                "cultural_dos": ["What to do while dining"],
+                "cultural_donts": ["What to avoid while dining"],
+                "payment_guidance": "How to handle the bill and tipping"
+            }
+            
+            track_tool_usage("menu_intelligence_enhanced")
+            return ok(final_result)
+            
         except Exception as gemini_error:
-            # Method 2: Tesseract OCR fallback (lightweight)
+            # Fallback to EasyOCR for basic text extraction
             try:
-                result, ocr_method = await extract_with_tesseract(image_bytes)
-
-                # If Tesseract worked, perform simple post-processing
-                if result.get("extracted_text"):
-                    text = result["extracted_text"]
-                    lines = [line.strip() for line in text.split('\n') if line.strip()]
-
-                    # Basic price detection
-                    price_patterns = [
-                        r'[\$€£¥₹]\s*\d+[.,]?\d*',
-                        r'\d+[.,]\d{2}(?!\d)',
-                        r'Rs\.?\s*\d+',
-                    ]
-
-                    detected_prices = []
-                    menu_items = []
-
-                    for line in lines:
-                        has_price = any(re.search(pattern, line, re.IGNORECASE) for pattern in price_patterns)
-                        if has_price:
-                            for pattern in price_patterns:
-                                matches = re.findall(pattern, line, re.IGNORECASE)
-                                detected_prices.extend(matches)
-                            menu_items.append({"name": line, "price": "", "description": "", "category": "unknown"})
-                        elif len(line) > 3:
-                            menu_items.append({"name": line, "price": "", "description": "", "category": "unknown"})
-
-                    result["detected_prices"] = list(set(detected_prices))[:10]
-                    result["menu_items"] = menu_items[:15]
-
+                fallback_result, fallback_method = await extract_with_easyocr(image_bytes)
+                
+                # Enhance basic OCR with simple recommendations
+                if fallback_result.get("extracted_text"):
+                    text = fallback_result["extracted_text"]
+                    
                     # Basic allergen checking
+                    allergen_warnings = []
                     if allergies:
-                        allergen_warnings = []
                         text_lower = text.lower()
                         allergen_keywords = {
                             'nuts': ['nut', 'almond', 'walnut', 'peanut', 'cashew'],
@@ -478,103 +728,49 @@ Please analyze this menu image:
                             'eggs': ['egg', 'mayo', 'mayonnaise'],
                             'soy': ['soy', 'tofu', 'soybean']
                         }
-
+                        
                         for allergy in allergies:
                             keywords = allergen_keywords.get(allergy.lower(), [allergy.lower()])
                             if any(keyword in text_lower for keyword in keywords):
                                 allergen_warnings.append(f"⚠️ {allergy.title()} may be present")
-
-                        result["allergen_warnings"] = allergen_warnings
-
-            except Exception as tesseract_error:
+                    
+                    fallback_result["allergen_warnings"] = allergen_warnings
+                    fallback_result["mode"] = "basic_ocr_fallback"
+                    fallback_result["analysis_method"] = fallback_method
+                    fallback_result["limitation"] = "Advanced analysis unavailable - basic OCR only"
+                    fallback_result["success"] = True
+                
+                return ok(fallback_result)
+                
+            except Exception as fallback_error:
                 return ok({
+                    "mode": "error_state",
                     "language": language,
-                    "error": "All OCR methods failed",
-                    "extracted_text": "OCR processing failed",
-                    "recommendations": ["Please try a clearer image or install OCR dependencies"],
-                    "allergen_warnings": [],
-                    "etiquette": ["Ask staff for menu translation"],
-                    "translation": "OCR unavailable",
-                    "ocr_method": "All methods failed",
-                    "success": False,
+                    "error": "All analysis methods failed",
                     "error_details": {
-                        "gemini": str(gemini_error),
-                        "tesseract": str(tesseract_error)
-                    }
+                        "gemini_error": str(gemini_error),
+                        "fallback_error": str(fallback_error)
+                    },
+                    "suggestions": [
+                        "Try with a clearer, higher-resolution image",
+                        "Ensure good lighting and minimal glare",
+                        "Check that GEMINI_API_KEY is properly configured",
+                        "Consider using discovery_mode for local cuisine recommendations"
+                    ],
+                    "success": False
                 })
-        
-        # Process Gemini results or enhance EasyOCR results
-        if not result.get("extracted_text") or len(result.get("extracted_text", "").strip()) < 3:
-            return ok({
-                "language": language,
-                "extracted_text": "No meaningful text detected",
-                "recommendations": ["Image may be unclear or contain no readable text"],
-                "allergen_warnings": [],
-                "etiquette": ["Point to menu items when ordering"],
-                "translation": "No text to analyze",
-                "ocr_method": ocr_method,
-                "success": False
-            })
-        
-        # Enhanced recommendations if Gemini didn't provide them
-        if not result.get("recommendations") and preferences:
-            recommendations = []
-            menu_items = result.get("menu_items", [])
-            
-            for pref in preferences:
-                pref_lower = pref.lower()
-                matching_items = []
-                
-                for item in menu_items:
-                    item_name = item.get("name", "") if isinstance(item, dict) else str(item)
-                    if pref_lower in item_name.lower():
-                        matching_items.append(item_name)
-                
-                if matching_items:
-                    recommendations.extend([f"✓ {item} (matches {pref})" for item in matching_items[:2]])
-            
-            if not recommendations:
-                recommendations = ["Ask server for recommendations based on your preferences"]
-            
-            result["recommendations"] = recommendations
-        
-        # Cultural etiquette suggestions
-        etiquette = [
-            "Point to menu items if there's a language barrier",
-            "Ask server 'What do you recommend?' in local language",
-            "Check if service charge is included before tipping",
-            "Say 'thank you' in the local language after ordering"
-        ]
-        
-        # Prepare final result
-        final_result = {
-            "language": language,
-            "extracted_text": result.get("extracted_text", "")[:800] + "..." if len(result.get("extracted_text", "")) > 800 else result.get("extracted_text", ""),
-            "menu_items": result.get("menu_items", [])[:15],
-            "detected_prices": result.get("detected_prices", [])[:10],
-            "recommendations": result.get("recommendations", [])[:6],
-            "allergen_warnings": result.get("allergen_warnings", []),
-            "cuisine_type": result.get("cuisine_type", "Unknown"),
-            "price_range": result.get("price_range", "Unknown"),
-            "etiquette": etiquette,
-            "translation": f"Menu analyzed using {ocr_method}",
-            "ocr_method": ocr_method,
-            "success": True
-        }
-        
-        track_tool_usage("menu_intelligence")
-        return ok(final_result)
         
     except Exception as e:
         return ok({
+            "mode": "unexpected_error",
             "language": language,
-            "error": f"Menu analysis failed: {str(e)}",
-            "extracted_text": "Processing failed",
-            "recommendations": ["Please try again with a clearer image"],
-            "allergen_warnings": ["Unable to detect allergens - ask staff"],
-            "etiquette": ["Use translation app as backup"],
-            "translation": "Analysis failed",
-            "ocr_method": "Error occurred",
+            "error": f"Unexpected error in menu intelligence: {str(e)}",
+            "fallback_advice": [
+                "Ask staff for menu recommendations",
+                "Use translation app for basic text",
+                "Point to dishes when ordering",
+                "Request allergen information from server"
+            ],
             "success": False
         })
 
