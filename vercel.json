@@ -1,0 +1,10 @@
+{
+  "functions": {
+    "api/mcp_starter.py": {
+      "runtime": "python3.9"
+    }
+  },
+  "routes": [
+    {"src": "/api/(.*)", "dest": "/api/mcp_starter.py"}
+  ]
+}
