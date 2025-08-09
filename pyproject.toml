@@ -14,7 +14,6 @@ dependencies = [
     "readabilipy>=0.3.0",
     "httpx>=0.27.2",
     "pydantic>=2.7.0",
-    "pytesseract>=0.3.10",
-    "opencv-python>=4.8.0",
-    "numpy>=1.24.0",
+    "google-generativeai>=0.3.0",
+    "easyocr>=1.7.0",
 ]

@@ -354,151 +354,320 @@ async def menu_intelligence(
 ) -> dict:
     import base64
     import io
+    import re
+    import json
     from PIL import Image
     
-    try:
-        # Try to import OCR dependencies (graceful fallback if not installed)
+    async def extract_with_gemini(image_bytes, allergies, preferences):
+        """Extract menu information using Gemini Vision API"""
         try:
-            import cv2
-            import numpy as np
-            import pytesseract
+            import google.generativeai as genai
             
-            # Configure tesseract path if specified in environment
-            tesseract_cmd = os.environ.get("TESSERACT_CMD")
-            if tesseract_cmd:
-                pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+            api_key = os.environ.get("GEMINI_API_KEY")
+            if not api_key:
+                raise Exception("GEMINI_API_KEY not found in environment")
             
-            ocr_available = True
-        except ImportError:
-            ocr_available = False
-        
-        # Decode base64 image
-        image_bytes = base64.b64decode(menu_image_base64)
-        image = Image.open(io.BytesIO(image_bytes))
-        
-        if not ocr_available:
-            return ok({
-                "language": language,
-                "error": "OCR dependencies not installed. Run: pip install pytesseract opencv-python numpy",
-                "setup_instructions": "See OCR_SETUP.md for full installation guide",
-                "extracted_text": "OCR not available",
-                "recommendations": ["Install OCR dependencies to analyze menu text"],
-                "allergen_warnings": ["Unable to detect allergens without OCR"],
-                "etiquette": ["Consider using translation app as backup"],
-                "translation": "OCR dependencies required for text extraction"
-            })
-        
-        # Convert PIL image to OpenCV format for preprocessing
-        cv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-        
-        # Preprocess image for better OCR
-        gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
-        
-        # Apply denoising
-        denoised = cv2.fastNlMeansDenoising(gray)
-        
-        # Apply adaptive thresholding
-        thresh = cv2.adaptiveThreshold(
-            denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
-        )
-        
-        # Convert back to PIL for tesseract
-        processed_image = Image.fromarray(thresh)
-        
-        # Extract text using OCR with custom config for better accuracy
-        custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,!?$€£¥₹₽₩₪₨₡₵₹()-/:;&@#%+='
-        extracted_text = pytesseract.image_to_string(processed_image, config=custom_config).strip()
-        
-        if not extracted_text:
-            return ok({
-                "language": language,
-                "extracted_text": "No text detected in the image",
-                "recommendations": ["Unable to analyze menu - image may be unclear or contain non-text elements"],
-                "allergen_warnings": [],
-                "etiquette": ["Consider asking staff for assistance with menu interpretation"],
-                "translation": "OCR failed - please provide a clearer image"
-            })
-        
-        # Simple menu item detection (look for patterns)
-        lines = [line.strip() for line in extracted_text.split('\n') if line.strip()]
-        menu_items = []
-        prices = []
-        
-        for line in lines:
-            # Look for price patterns (numbers with currency symbols)
-            if any(char in line for char in ['$', '€', '£', '¥', '₹', '₽', '₩', '₪', '₨', '₡', '₵']):
-                prices.append(line)
-            elif len(line) > 3 and not line.isdigit():  # Likely a menu item
-                menu_items.append(line)
-        
-        # Generate recommendations based on extracted text and preferences
-        recommendations = []
-        for item in menu_items[:5]:  # Top 5 items
-            item_lower = item.lower()
-            if preferences:
-                for pref in preferences:
-                    if pref.lower() in item_lower:
-                        recommendations.append(f"✓ {item} (matches {pref} preference)")
-                        break
-                else:
-                    recommendations.append(f"• {item}")
-            else:
-                recommendations.append(f"• {item}")
-        
-        if not recommendations:
-            recommendations = ["Popular items based on menu analysis", "Ask server for today's specials"]
-        
-        # Check for allergen warnings
-        allergen_warnings = []
-        if allergies:
-            text_lower = extracted_text.lower()
-            for allergen in allergies:
-                allergen_keywords = {
-                    'nuts': ['nut', 'almond', 'walnut', 'peanut', 'cashew', 'pistachio'],
-                    'dairy': ['milk', 'cheese', 'cream', 'butter', 'yogurt', 'lactose'],
-                    'gluten': ['wheat', 'bread', 'pasta', 'flour', 'gluten'],
-                    'soy': ['soy', 'soybean', 'tofu'],
-                    'eggs': ['egg', 'mayo', 'mayonnaise'],
-                    'fish': ['fish', 'salmon', 'tuna', 'cod', 'seafood'],
-                    'shellfish': ['shrimp', 'crab', 'lobster', 'shellfish', 'prawns']
-                }
+            # Configure Gemini
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel('gemini-2.5-pro')
+            
+            # Convert bytes to PIL Image
+            pil_image = Image.open(io.BytesIO(image_bytes))
+            
+            # Create comprehensive prompt for menu analysis
+            allergen_text = f"Allergies to check for: {', '.join(allergies)}" if allergies else "No specific allergies to check"
+            preference_text = f"Dietary preferences: {', '.join(preferences)}" if preferences else "No specific preferences"
+            
+            prompt = f"""
+Analyze this menu image and extract information in the following JSON format:
+
+{{
+    "extracted_text": "Full text content from the menu",
+    "menu_items": [
+        {{
+            "name": "dish name",
+            "price": "price if visible",
+            "description": "description if available",
+            "category": "appetizer/main/dessert/drink"
+        }}
+    ],
+    "detected_prices": ["list of all prices found"],
+    "recommendations": [
+        "recommended items based on preferences with explanations"
+    ],
+    "allergen_warnings": [
+        "specific allergen warnings based on menu content"
+    ],
+    "cuisine_type": "type of cuisine (Italian, Chinese, etc.)",
+    "price_range": "budget/moderate/expensive",
+    "vegetarian_options": ["list of vegetarian dishes if any"],
+    "spicy_dishes": ["list of spicy dishes if any"]
+}}
+
+User Context:
+{allergen_text}
+{preference_text}
+
+Instructions:
+1. Extract ALL visible text from the menu
+2. Identify individual menu items with prices where visible
+3. Look for allergen ingredients in item descriptions
+4. Recommend items based on user preferences
+5. Categorize dishes appropriately
+6. Provide helpful warnings for allergies
+7. Be thorough but concise
+8. If text is unclear, indicate uncertainty
+
+Please analyze this menu image:
+"""
+            
+            # Generate response
+            response = model.generate_content([prompt, pil_image])
+            
+            if not response.text:
+                raise Exception("Gemini returned empty response")
+            
+            # Try to parse JSON response
+            try:
+                # Clean the response text (remove markdown code blocks if present)
+                clean_text = response.text.strip()
+                if clean_text.startswith('```json'):
+                    clean_text = clean_text[7:]
+                if clean_text.endswith('```'):
+                    clean_text = clean_text[:-3]
+                clean_text = clean_text.strip()
                 
-                keywords = allergen_keywords.get(allergen.lower(), [allergen.lower()])
-                if any(keyword in text_lower for keyword in keywords):
-                    allergen_warnings.append(f"⚠️ {allergen.title()} detected in menu items")
+                result = json.loads(clean_text)
+                return result, "Gemini Vision API"
+                
+            except json.JSONDecodeError:
+                # If JSON parsing fails, create structured response from text
+                response_text = response.text
+                return {
+                    "extracted_text": response_text,
+                    "menu_items": [],
+                    "detected_prices": [],
+                    "recommendations": [response_text[:200] + "..."],
+                    "allergen_warnings": [],
+                    "cuisine_type": "Unknown",
+                    "price_range": "Unknown"
+                }, "Gemini Vision API (text mode)"
+                
+        except Exception as e:
+            raise Exception(f"Gemini API failed: {str(e)}")
+    
+    async def extract_with_easyocr(image_bytes):
+        """Fallback OCR using EasyOCR"""
+        try:
+            import easyocr
+            import numpy as np
+            
+            # Convert to numpy array
+            pil_image = Image.open(io.BytesIO(image_bytes))
+            if pil_image.mode != 'RGB':
+                pil_image = pil_image.convert('RGB')
+            
+            img_array = np.array(pil_image)
+            
+            # Initialize EasyOCR
+            reader = easyocr.Reader(['en'])
+            results = reader.readtext(img_array, detail=0)
+            
+            extracted_text = "\n".join(results)
+            if not extracted_text.strip():
+                raise Exception("No text detected")
+            
+            return {
+                "extracted_text": extracted_text,
+                "menu_items": [],
+                "detected_prices": [],
+                "recommendations": ["Basic OCR text extraction - manual analysis needed"],
+                "allergen_warnings": [],
+                "cuisine_type": "Unknown",
+                "price_range": "Unknown"
+            }, "EasyOCR (fallback)"
+            
+        except Exception as e:
+            raise Exception(f"EasyOCR failed: {str(e)}")
+    
+    try:
+        # Decode and validate image
+        try:
+            # Handle data URL prefix
+            if menu_image_base64.startswith('data:image'):
+                menu_image_base64 = menu_image_base64.split(',')[1]
+            
+            menu_image_base64 = menu_image_base64.strip()
+            image_bytes = base64.b64decode(menu_image_base64)
+            
+            # Validate image
+            pil_image = Image.open(io.BytesIO(image_bytes))
+            if pil_image.mode != 'RGB':
+                pil_image = pil_image.convert('RGB')
+                
+        except Exception as decode_error:
+            return ok({
+                "language": language,
+                "error": f"Failed to decode image: {str(decode_error)}",
+                "extracted_text": "Image decode failed",
+                "recommendations": ["Please check the image format and try again"],
+                "allergen_warnings": [],
+                "etiquette": ["Ask staff for menu assistance"],
+                "translation": "Image processing failed",
+                "success": False
+            })
         
-        # Basic etiquette suggestions
+        # Try Gemini first, then fallback to EasyOCR
+        result = {}
+        ocr_method = ""
+        
+        try:
+            # Method 1: Gemini Vision API (best accuracy and intelligence)
+            result, ocr_method = await extract_with_gemini(image_bytes, allergies, preferences)
+            
+        except Exception as gemini_error:
+            try:
+                # Method 2: EasyOCR fallback
+                result, ocr_method = await extract_with_easyocr(image_bytes)
+                
+                # If EasyOCR worked, do basic processing
+                if result.get("extracted_text"):
+                    text = result["extracted_text"]
+                    lines = [line.strip() for line in text.split('\n') if line.strip()]
+                    
+                    # Basic price detection
+                    price_patterns = [
+                        r'[\$€£¥₹]\s*\d+[.,]?\d*',
+                        r'\d+[.,]\d{2}(?!\d)',
+                        r'Rs\.?\s*\d+',
+                    ]
+                    
+                    detected_prices = []
+                    menu_items = []
+                    
+                    for line in lines:
+                        has_price = any(re.search(pattern, line, re.IGNORECASE) for pattern in price_patterns)
+                        if has_price:
+                            for pattern in price_patterns:
+                                matches = re.findall(pattern, line, re.IGNORECASE)
+                                detected_prices.extend(matches)
+                            menu_items.append({"name": line, "price": "", "description": "", "category": "unknown"})
+                        elif len(line) > 3:
+                            menu_items.append({"name": line, "price": "", "description": "", "category": "unknown"})
+                    
+                    result["detected_prices"] = list(set(detected_prices))[:10]
+                    result["menu_items"] = menu_items[:15]
+                    
+                    # Basic allergen checking
+                    if allergies:
+                        allergen_warnings = []
+                        text_lower = text.lower()
+                        allergen_keywords = {
+                            'nuts': ['nut', 'almond', 'walnut', 'peanut', 'cashew'],
+                            'dairy': ['milk', 'cheese', 'butter', 'cream', 'yogurt'],
+                            'gluten': ['wheat', 'bread', 'pasta', 'flour', 'gluten'],
+                            'shellfish': ['shrimp', 'crab', 'lobster', 'shellfish'],
+                            'eggs': ['egg', 'mayo', 'mayonnaise'],
+                            'soy': ['soy', 'tofu', 'soybean']
+                        }
+                        
+                        for allergy in allergies:
+                            keywords = allergen_keywords.get(allergy.lower(), [allergy.lower()])
+                            if any(keyword in text_lower for keyword in keywords):
+                                allergen_warnings.append(f"⚠️ {allergy.title()} may be present")
+                        
+                        result["allergen_warnings"] = allergen_warnings
+                
+            except Exception as easyocr_error:
+                return ok({
+                    "language": language,
+                    "error": "All OCR methods failed",
+                    "extracted_text": "OCR processing failed",
+                    "recommendations": ["Please try a clearer image or install OCR dependencies"],
+                    "allergen_warnings": [],
+                    "etiquette": ["Ask staff for menu translation"],
+                    "translation": "OCR unavailable",
+                    "ocr_method": "All methods failed",
+                    "success": False,
+                    "error_details": {
+                        "gemini": str(gemini_error),
+                        "easyocr": str(easyocr_error)
+                    }
+                })
+        
+        # Process Gemini results or enhance EasyOCR results
+        if not result.get("extracted_text") or len(result.get("extracted_text", "").strip()) < 3:
+            return ok({
+                "language": language,
+                "extracted_text": "No meaningful text detected",
+                "recommendations": ["Image may be unclear or contain no readable text"],
+                "allergen_warnings": [],
+                "etiquette": ["Point to menu items when ordering"],
+                "translation": "No text to analyze",
+                "ocr_method": ocr_method,
+                "success": False
+            })
+        
+        # Enhanced recommendations if Gemini didn't provide them
+        if not result.get("recommendations") and preferences:
+            recommendations = []
+            menu_items = result.get("menu_items", [])
+            
+            for pref in preferences:
+                pref_lower = pref.lower()
+                matching_items = []
+                
+                for item in menu_items:
+                    item_name = item.get("name", "") if isinstance(item, dict) else str(item)
+                    if pref_lower in item_name.lower():
+                        matching_items.append(item_name)
+                
+                if matching_items:
+                    recommendations.extend([f"✓ {item} (matches {pref})" for item in matching_items[:2]])
+            
+            if not recommendations:
+                recommendations = ["Ask server for recommendations based on your preferences"]
+            
+            result["recommendations"] = recommendations
+        
+        # Cultural etiquette suggestions
         etiquette = [
-            "Point to menu items if language barrier exists",
-            "Ask 'What do you recommend?' in local language",
-            "Check if service charge is included before tipping"
+            "Point to menu items if there's a language barrier",
+            "Ask server 'What do you recommend?' in local language",
+            "Check if service charge is included before tipping",
+            "Say 'thank you' in the local language after ordering"
         ]
         
-        # Simple translation attempt (placeholder - in production you'd use a translation API)
-        translation_note = f"Extracted {len(lines)} lines of text from menu image"
-        if language != "en":
-            translation_note += f" (translation to {language} requires external API)"
-        
-        return ok({
+        # Prepare final result
+        final_result = {
             "language": language,
-            "extracted_text": extracted_text,
-            "menu_items": menu_items,
-            "detected_prices": prices,
-            "recommendations": recommendations,
-            "allergen_warnings": allergen_warnings,
+            "extracted_text": result.get("extracted_text", "")[:800] + "..." if len(result.get("extracted_text", "")) > 800 else result.get("extracted_text", ""),
+            "menu_items": result.get("menu_items", [])[:15],
+            "detected_prices": result.get("detected_prices", [])[:10],
+            "recommendations": result.get("recommendations", [])[:6],
+            "allergen_warnings": result.get("allergen_warnings", []),
+            "cuisine_type": result.get("cuisine_type", "Unknown"),
+            "price_range": result.get("price_range", "Unknown"),
             "etiquette": etiquette,
-            "translation": translation_note,
-            "ocr_confidence": "OCR processing completed successfully"
-        })
+            "translation": f"Menu analyzed using {ocr_method}",
+            "ocr_method": ocr_method,
+            "success": True
+        }
+        
+        track_tool_usage("menu_intelligence")
+        return ok(final_result)
         
     except Exception as e:
         return ok({
             "language": language,
-            "error": f"OCR processing failed: {str(e)}",
-            "recommendations": ["Please provide a clearer image of the menu"],
-            "allergen_warnings": ["Unable to detect allergens - please ask staff"],
-            "etiquette": ["Consider using translation app as backup"],
-            "translation": "OCR failed - manual translation needed"
+            "error": f"Menu analysis failed: {str(e)}",
+            "extracted_text": "Processing failed",
+            "recommendations": ["Please try again with a clearer image"],
+            "allergen_warnings": ["Unable to detect allergens - ask staff"],
+            "etiquette": ["Use translation app as backup"],
+            "translation": "Analysis failed",
+            "ocr_method": "Error occurred",
+            "success": False
         })
 
 NAV_SOCIAL_DESCRIPTION = RichToolDescription(
