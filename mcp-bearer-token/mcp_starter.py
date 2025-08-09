@@ -128,8 +128,6 @@ def err(message: str, code: str = "error"):
     return {"ok": False, "error": {"code": code, "message": message}, "ts": datetime.utcnow().isoformat()}
 
 # --- In-memory stores (can be swapped for a DB) ---
-SAFETY_ALERTS: list[dict] = []
-CHECK_INS: dict[str, list[dict]] = {}
 MEMORIES: dict[str, list[dict]] = {}
 USAGE: dict[str, int] = {}
 
@@ -207,56 +205,9 @@ async def local_social_dynamics_decoder(
     ]
     return ok({"city": city, "country": country, "time_of_day": time_of_day, "context": context, "advice": advice})
 
-RELIGIOUS_FEST_DESCRIPTION = RichToolDescription(
-    description="Religious and Festival Calendar Integration: cross-check travel dates with local events.",
-    use_when="User has travel dates and wants to understand festivals and closures.",
-)
+## Removed: religious_and_festival_calendar (not needed)
 
-@mcp.tool(description=RELIGIOUS_FEST_DESCRIPTION.model_dump_json())
-async def religious_and_festival_calendar(
-    destination: Annotated[str, Field(description="City/Country")],
-    start_date: Annotated[str, Field(description="Trip start date in ISO format YYYY-MM-DD")],
-    end_date: Annotated[str, Field(description="Trip end date in ISO format YYYY-MM-DD")],
-) -> dict:
-    # Minimal placeholder: suggest using public calendars or APIs
-    events = [
-        {"name": "Local Market Day", "date": start_date, "impact": "Road closures possible"},
-        {"name": "Religious Observance", "date": end_date, "impact": "Some restaurants may be closed"},
-    ]
-    return ok({"destination": destination, "events": events})
-
-CROWD_SAFETY_DESCRIPTION = RichToolDescription(
-    description="Crowd-Sourced Safety Intelligence: submit and receive real-time safety alerts.",
-    use_when="User wants to report or check local safety alerts.",
-    side_effects="Stores minimal alert data in memory.",
-)
-
-class SafetyAlert(BaseModel):
-    id: str
-    user: str
-    location: str
-    type: str
-    details: str | None = None
-    ts: str
-
-@mcp.tool(description=CROWD_SAFETY_DESCRIPTION.model_dump_json())
-async def crowd_sourced_safety_intel(
-    action: Annotated[Literal["submit", "list"], Field(description="Submit a new alert or list recent alerts")],
-    user_id: Annotated[str, Field(description="User identifier, e.g., phone or session id")],
-    location: Annotated[str | None, Field(description="City/Area name or coordinates")] = None,
-    alert_type: Annotated[str | None, Field(description="Type: scam/unsafe_area/police_check/etc")] = None,
-    details: Annotated[str | None, Field(description="Optional details")]=None,
-    limit: Annotated[int | None, Field(description="Max number of alerts to return for list")]=10,
-) -> dict:
-    if action == "submit":
-        if not (location and alert_type):
-            raise McpError(ErrorData(code=INVALID_PARAMS, message="location and alert_type required for submit"))
-        item = SafetyAlert(id=str(uuid.uuid4()), user=user_id, location=location, type=alert_type, details=details, ts=datetime.utcnow().isoformat()).model_dump()
-        SAFETY_ALERTS.append(item)
-        return ok({"submitted": item})
-    # list
-    recent = list(reversed(SAFETY_ALERTS))[: (limit or 10)]
-    return ok({"alerts": recent})
+## Removed: crowd_sourced_safety_intel (not needed)
 
 EMERGENCY_PHRASE_DESCRIPTION = RichToolDescription(
     description="Emergency Phrase Generator: respectful phrases in local language.",
@@ -284,61 +235,11 @@ async def emergency_phrase_generator(
     # Placeholder translation
     return ok({"intent": intent, "language": language, "phrase": chosen.get("en")})
 
-PREDICTIVE_RISK_DESCRIPTION = RichToolDescription(
-    description="Predictive Risk Assessment: analyzes news/weather/social to predict risks 24–48h ahead.",
-    use_when="User wants short-term risk forecast.",
-)
+## Removed: predictive_risk_assessment (not needed)
 
-@mcp.tool(description=PREDICTIVE_RISK_DESCRIPTION.model_dump_json())
-async def predictive_risk_assessment(
-    destination: Annotated[str, Field(description="City/Country")],
-    horizon_hours: Annotated[int, Field(description="Forecast horizon in hours (24-48 recommended)")] = 36,
-) -> dict:
-    # Placeholder scoring
-    score = 0.2 if horizon_hours <= 24 else 0.35
-    drivers = ["Weather variability", "Political demonstrations", "Holiday congestion"]
-    return ok({"destination": destination, "horizon_hours": horizon_hours, "risk_score": score, "drivers": drivers})
+## Removed: digital_safety_net (not needed)
 
-DIGITAL_SAFETY_NET_DESCRIPTION = RichToolDescription(
-    description="Digital Safety Net: monitor user check-ins and detect inactivity.",
-    use_when="User wants periodic safety pings and alerts on inactivity.",
-    side_effects="Stores check-in timestamps in memory.",
-)
-
-@mcp.tool(description=DIGITAL_SAFETY_NET_DESCRIPTION.model_dump_json())
-async def digital_safety_net(
-    action: Annotated[Literal["check_in", "status"], Field(description="Check in now or get status")],
-    user_id: Annotated[str, Field(description="User identifier, e.g., phone or session id")],
-    inactivity_threshold_minutes: Annotated[int, Field(description="Minutes of inactivity before raising alert")]=120,
-) -> dict:
-    now = datetime.utcnow()
-    if action == "check_in":
-        CHECK_INS.setdefault(user_id, []).append({"ts": now.isoformat()})
-        return ok({"checked_in_at": now.isoformat()})
-    # status
-    last = (CHECK_INS.get(user_id) or [])[-1]["ts"] if CHECK_INS.get(user_id) else None
-    alert = None
-    if last:
-        last_dt = datetime.fromisoformat(last)
-        mins = (now - last_dt).total_seconds() / 60
-        if mins > inactivity_threshold_minutes:
-            alert = {"type": "inactivity_alert", "minutes_inactive": round(mins, 1)}
-    return ok({"last_check_in": last, "alert": alert})
-
-VISUAL_STORY_DESCRIPTION = RichToolDescription(
-    description="Contextual Visual Storytelling: given a landmark image, return engaging stories.",
-    use_when="User shares a landmark photo and wants a story.",
-)
-
-@mcp.tool(description=VISUAL_STORY_DESCRIPTION.model_dump_json())
-async def contextual_visual_storytelling(
-    landmark_image_base64: Annotated[str, Field(description="Base64 image of the landmark")],
-    interests: Annotated[str | None, Field(description="User interests to tailor the story")]=None,
-    language: Annotated[str | None, Field(description="Output language")]="en",
-) -> dict:
-    # Placeholder: In real system, send to VLM for captioning and story generation
-    story = "A storied landmark with centuries of history, echoing tales of trade, culture, and resilience."
-    return ok({"language": language, "story": story})
+## Removed: contextual_visual_storytelling (not needed)
 
 MENU_INTEL_DESCRIPTION = RichToolDescription(
     description="Menu Intelligence: analyze a menu photo for allergens, recommendations, and etiquette.",
@@ -456,27 +357,35 @@ Please analyze this menu image:
         except Exception as e:
             raise Exception(f"Gemini API failed: {str(e)}")
     
-    async def extract_with_easyocr(image_bytes):
-        """Fallback OCR using EasyOCR"""
+    async def extract_with_tesseract(image_bytes):
+        """Fallback OCR using Tesseract with OpenCV preprocessing (lightweight)."""
         try:
-            import easyocr
             import numpy as np
-            
-            # Convert to numpy array
+            import cv2
+            import pytesseract
+
+            # Configure tesseract path if specified in environment
+            tesseract_cmd = os.environ.get("TESSERACT_CMD")
+            if tesseract_cmd:
+                pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+
+            # Load image
             pil_image = Image.open(io.BytesIO(image_bytes))
             if pil_image.mode != 'RGB':
                 pil_image = pil_image.convert('RGB')
-            
-            img_array = np.array(pil_image)
-            
-            # Initialize EasyOCR
-            reader = easyocr.Reader(['en'])
-            results = reader.readtext(img_array, detail=0)
-            
-            extracted_text = "\n".join(results)
-            if not extracted_text.strip():
-                raise Exception("No text detected")
-            
+
+            cv_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+            gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
+            denoised = cv2.fastNlMeansDenoising(gray)
+            thresh = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+            processed_image = Image.fromarray(thresh)
+
+            custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,!?$€£¥₹₽₩₪₨₡₵₹()-/:;&@#%+'
+            extracted_text = pytesseract.image_to_string(processed_image, config=custom_config).strip()
+
+            if not extracted_text:
+                raise Exception("No text detected by Tesseract")
+
             return {
                 "extracted_text": extracted_text,
                 "menu_items": [],
@@ -485,10 +394,10 @@ Please analyze this menu image:
                 "allergen_warnings": [],
                 "cuisine_type": "Unknown",
                 "price_range": "Unknown"
-            }, "EasyOCR (fallback)"
-            
+            }, "Tesseract OCR (fallback)"
+
         except Exception as e:
-            raise Exception(f"EasyOCR failed: {str(e)}")
+            raise Exception(f"Tesseract OCR failed: {str(e)}")
     
     try:
         # Decode and validate image
@@ -517,34 +426,33 @@ Please analyze this menu image:
                 "success": False
             })
         
-        # Try Gemini first, then fallback to EasyOCR
+        # Try Gemini first, then fallback to Tesseract OCR
         result = {}
         ocr_method = ""
-        
+
         try:
             # Method 1: Gemini Vision API (best accuracy and intelligence)
             result, ocr_method = await extract_with_gemini(image_bytes, allergies, preferences)
-            
         except Exception as gemini_error:
+            # Method 2: Tesseract OCR fallback (lightweight)
             try:
-                # Method 2: EasyOCR fallback
-                result, ocr_method = await extract_with_easyocr(image_bytes)
-                
-                # If EasyOCR worked, do basic processing
+                result, ocr_method = await extract_with_tesseract(image_bytes)
+
+                # If Tesseract worked, perform simple post-processing
                 if result.get("extracted_text"):
                     text = result["extracted_text"]
                     lines = [line.strip() for line in text.split('\n') if line.strip()]
-                    
+
                     # Basic price detection
                     price_patterns = [
                         r'[\$€£¥₹]\s*\d+[.,]?\d*',
                         r'\d+[.,]\d{2}(?!\d)',
                         r'Rs\.?\s*\d+',
                     ]
-                    
+
                     detected_prices = []
                     menu_items = []
-                    
+
                     for line in lines:
                         has_price = any(re.search(pattern, line, re.IGNORECASE) for pattern in price_patterns)
                         if has_price:
@@ -554,10 +462,10 @@ Please analyze this menu image:
                             menu_items.append({"name": line, "price": "", "description": "", "category": "unknown"})
                         elif len(line) > 3:
                             menu_items.append({"name": line, "price": "", "description": "", "category": "unknown"})
-                    
+
                     result["detected_prices"] = list(set(detected_prices))[:10]
                     result["menu_items"] = menu_items[:15]
-                    
+
                     # Basic allergen checking
                     if allergies:
                         allergen_warnings = []
@@ -570,15 +478,15 @@ Please analyze this menu image:
                             'eggs': ['egg', 'mayo', 'mayonnaise'],
                             'soy': ['soy', 'tofu', 'soybean']
                         }
-                        
+
                         for allergy in allergies:
                             keywords = allergen_keywords.get(allergy.lower(), [allergy.lower()])
                             if any(keyword in text_lower for keyword in keywords):
                                 allergen_warnings.append(f"⚠️ {allergy.title()} may be present")
-                        
+
                         result["allergen_warnings"] = allergen_warnings
-                
-            except Exception as easyocr_error:
+
+            except Exception as tesseract_error:
                 return ok({
                     "language": language,
                     "error": "All OCR methods failed",
@@ -591,7 +499,7 @@ Please analyze this menu image:
                     "success": False,
                     "error_details": {
                         "gemini": str(gemini_error),
-                        "easyocr": str(easyocr_error)
+                        "tesseract": str(tesseract_error)
                     }
                 })
         
@@ -691,71 +599,13 @@ async def local_navigation_social_intelligence(
     score = 0.15 if caution_preference == "high" else 0.25
     return ok({"mode": mode, "safety_score": score, "steps": steps})
 
-ACCENT_TRAIN_DESCRIPTION = RichToolDescription(
-    description="Accent and Dialect Adaptation Training: pronounce phrases with local accent and feedback.",
-    use_when="User practicing phrases.",
-)
+## Removed: accent_and_dialect_training (not needed)
 
-@mcp.tool(description=ACCENT_TRAIN_DESCRIPTION.model_dump_json())
-async def accent_and_dialect_training(
-    target_phrase: Annotated[str, Field(description="Phrase to practice")],
-    language: Annotated[str, Field(description="Target language/dialect")],
-    user_audio_base64: Annotated[str | None, Field(description="Optional recorded audio for feedback")]=None,
-) -> dict:
-    # Placeholder scoring
-    feedback = "Good pace, soften the 'r' sound, emphasize vowel length"
-    score = 0.78
-    return ok({"language": language, "feedback": feedback, "score": score})
+## Removed: two_way_live_voice_interpreter (not needed)
 
-LIVE_VOICE_INTERPRETER_DESCRIPTION = RichToolDescription(
-    description="Two-Way Live Voice Interpreter: real-time voice translations.",
-    use_when="Back-and-forth live interpreting.",
-)
+## Removed: message_relay_audio_translation (not needed)
 
-@mcp.tool(description=LIVE_VOICE_INTERPRETER_DESCRIPTION.model_dump_json())
-async def two_way_live_voice_interpreter(
-    source_audio_base64: Annotated[str, Field(description="Base64 audio in source language")],
-    source_lang: Annotated[str, Field(description="Source language code")],
-    target_lang: Annotated[str, Field(description="Target language code")],
-) -> dict:
-    # Placeholder: STT -> translate -> TTS
-    return ok({"transcript": "Hello, where is the station?", "translation": "Hola, ¿dónde está la estación?", "audio_base64": None})
-
-MESSAGE_RELAY_AUDIO_DESCRIPTION = RichToolDescription(
-    description="Message Relay with Local Audio Translation: typed text -> local-language audio and back.",
-    use_when="User wants to play audio in local language for another person.",
-)
-
-@mcp.tool(description=MESSAGE_RELAY_AUDIO_DESCRIPTION.model_dump_json())
-async def message_relay_audio_translation(
-    text: Annotated[str, Field(description="Text to translate and synthesize")],
-    target_lang: Annotated[str, Field(description="Target language code")],
-) -> dict:
-    # Placeholder TTS audio
-    return ok({"translation": text, "audio_base64": None})
-
-EXPENSE_CONTEXT_DESCRIPTION = RichToolDescription(
-    description="Real-time Expense Cultural Context: detect overpricing and negotiation tips.",
-    use_when="User wants to know if a price is fair.",
-)
-
-@mcp.tool(description=EXPENSE_CONTEXT_DESCRIPTION.model_dump_json())
-async def expense_cultural_context(
-    item: Annotated[str, Field(description="Item/service name")],
-    quoted_price: Annotated[float, Field(description="Quoted price in local currency")],
-    typical_price_range: Annotated[list[float] | None, Field(description="Typical min/max price in local currency")]=None,
-    negotiation_style: Annotated[str | None, Field(description="polite/friendly/firm")]="friendly",
-) -> dict:
-    min_p, max_p = (typical_price_range or [quoted_price * 0.6, quoted_price * 0.9])
-    overpriced = quoted_price > max_p
-    tips = ["Start with a smile and counter at 60-70%", "Be ready to walk away politely"]
-    return ok({
-        "item": item,
-        "quoted_price": quoted_price,
-        "typical_price_range": [min_p, max_p],
-        "overpriced": overpriced,
-        "negotiation_tips": tips,
-    })
+## Removed: expense_cultural_context (not needed)
 
 TRAVEL_MEMORY_DESCRIPTION = RichToolDescription(
     description="Travel Memory Archive: save cultural experiences, photos, and AI insights.",
@@ -788,75 +638,324 @@ async def travel_memory_archive(
     # list
     return ok({"memories": list(reversed(MEMORIES.get(user_id, [])))})
 
-# Retain existing job and image tools for compatibility
-
-JOBFINDER_DESC = RichToolDescription(
-    description="Smart job tool: analyze descriptions, fetch URLs, or search jobs based on free text.",
-    use_when="Evaluate job descriptions or search for jobs using freeform goals.",
-    side_effects="Returns insights, fetched job descriptions, or relevant links.",
+INTELLIGENT_AGENT_DESCRIPTION = RichToolDescription(
+    description="Intelligent Travel Agent: analyzes complex travel requests and orchestrates multiple tools to provide comprehensive travel assistance.",
+    use_when="User has complex travel planning needs, multi-step itineraries, or wants unified travel advice.",
+    side_effects="May call multiple underlying tools and save memories based on request context.",
 )
 
-@mcp.tool(description=JOBFINDER_DESC.model_dump_json())
-async def job_finder(
-    user_goal: Annotated[str, Field(description="The user's goal (description, intent, or freeform query)")],
-    job_description: Annotated[str | None, Field(description="Full job description text")] = None,
-    job_url: Annotated[AnyUrl | None, Field(description="URL to fetch a job description")] = None,
-    raw: Annotated[bool, Field(description="Return raw HTML content if True")] = False,
-) -> str:
-    if job_description:
-        return (
-            f"📝 **Job Description Analysis**\n\n"
-            f"---\n{job_description.strip()}\n---\n\n"
-            f"User Goal: **{user_goal}**\n\n"
-            f"💡 Suggestions:\n- Tailor your resume.\n- Evaluate skill match.\n- Consider applying if relevant."
-        )
-
-    if job_url:
-        content, _ = await Fetch.fetch_url(str(job_url), Fetch.USER_AGENT, force_raw=raw)
-        return (
-            f"🔗 **Fetched Job Posting from URL**: {job_url}\n\n"
-            f"---\n{content.strip()}\n---\n\n"
-            f"User Goal: **{user_goal}**"
-        )
-
-    if "look for" in user_goal.lower() or "find" in user_goal.lower():
-        links = await Fetch.google_search_links(user_goal)
-        return (
-            f"🔍 **Search Results for**: _{user_goal}_\n\n" +
-            "\n".join(f"- {link}" for link in links)
-        )
-
-    raise McpError(ErrorData(code=INVALID_PARAMS, message="Provide either a job description, a job URL, or a search query in user_goal."))
-
-MAKE_IMG_BLACK_AND_WHITE_DESCRIPTION = RichToolDescription(
-    description="Convert an image to black and white and save it.",
-    use_when="Use when the user provides an image to convert to black and white.",
-    side_effects="Processes image in-memory and returns PNG base64.",
-)
-
-@mcp.tool(description=MAKE_IMG_BLACK_AND_WHITE_DESCRIPTION.model_dump_json())
-async def make_img_black_and_white(
-    puch_image_data: Annotated[str, Field(description="Base64-encoded image data to convert to black and white")] = None,
-) -> list[TextContent | ImageContent]:
-    import base64
-    import io
-
-    from PIL import Image
-
+@mcp.tool(description=INTELLIGENT_AGENT_DESCRIPTION.model_dump_json())
+async def intelligent_travel_agent(
+    travel_request: Annotated[str, Field(description="Natural language travel request or question")],
+    user_id: Annotated[str, Field(description="User identifier for memory storage")],
+    home_country: Annotated[str | None, Field(description="User's home country (if known)")] = None,
+    current_location: Annotated[str | None, Field(description="Current location (city, country)")] = None,
+    dietary_restrictions: Annotated[list[str] | None, Field(description="Known allergies or dietary preferences")] = None,
+) -> dict:
+    """
+    Intelligent agent that analyzes travel requests and orchestrates appropriate tools.
+    """
+    track_tool_usage("intelligent_travel_agent")
+    
     try:
-        image_bytes = base64.b64decode(puch_image_data)
-        image = Image.open(io.BytesIO(image_bytes))
-
-        bw_image = image.convert("L")
-
-        buf = io.BytesIO()
-        bw_image.save(buf, format="PNG")
-        bw_bytes = buf.getvalue()
-        bw_base64 = base64.b64encode(bw_bytes).decode("utf-8")
-
-        return [ImageContent(type="image", mimeType="image/png", data=bw_base64)]
+        # Parse the request to determine intent and extract key information
+        request_lower = travel_request.lower()
+        orchestrated_results = {}
+        
+        # Extract locations mentioned in the request
+        def extract_locations():
+            locations = []
+            # Simple keyword extraction - in production, use NER
+            location_indicators = ["to ", "in ", "from ", "visit ", "going to ", "traveling to "]
+            for indicator in location_indicators:
+                if indicator in request_lower:
+                    parts = request_lower.split(indicator)
+                    if len(parts) > 1:
+                        potential_location = parts[1].split()[0:3]  # Take next 1-3 words
+                        locations.append(" ".join(potential_location))
+            return locations
+        
+        locations = extract_locations()
+        destination = locations[0] if locations else current_location
+        
+        # Determine which tools to use based on request content
+        needs_cultural_context = any(word in request_lower for word in [
+            "culture", "etiquette", "customs", "do's", "don'ts", "taboo", "manners", "behavior"
+        ])
+        
+        needs_navigation = any(word in request_lower for word in [
+            "route", "directions", "navigate", "walk", "drive", "transit", "from", "to", "path"
+        ])
+        
+        needs_emergency_phrases = any(word in request_lower for word in [
+            "emergency", "help", "lost", "phrase", "language", "translate", "say"
+        ])
+        
+        needs_social_dynamics = any(word in request_lower for word in [
+            "local", "social", "crowd", "busy", "time", "when", "market", "area"
+        ])
+        
+        needs_menu_help = any(word in request_lower for word in [
+            "menu", "food", "restaurant", "eat", "dining", "allergies", "vegetarian"
+        ])
+        
+        wants_to_save_memory = any(word in request_lower for word in [
+            "remember", "save", "memory", "experience", "note"
+        ])
+        
+        # Prepare tool suggestions and structured guidance instead of direct execution
+        suggested_tools = []
+        guidance = {}
+        
+        # 1. Cultural Context Analysis
+        if needs_cultural_context and home_country and destination:
+            suggested_tools.append({
+                "tool": "cultural_context_predictor",
+                "parameters": {
+                    "home_country": home_country,
+                    "destination_country": destination,
+                    "traveler_profile": f"Extracted from request: {travel_request[:100]}"
+                },
+                "reason": "Get cultural etiquette and taboos guidance"
+            })
+            
+            # Provide immediate basic guidance
+            guidance["cultural_tips"] = {
+                "general_advice": [
+                    "Research local customs and dress codes",
+                    "Learn basic greetings and polite phrases",
+                    "Be respectful of religious and cultural sites",
+                    "Observe and follow local social norms"
+                ],
+                "suggested_research": [
+                    "Business etiquette if traveling for work",
+                    "Dining customs and table manners", 
+                    "Tipping practices and gift-giving customs"
+                ]
+            }
+        
+        # 2. Navigation Planning
+        if needs_navigation:
+            # Extract origin and destination from request
+            origin = current_location or "current location"
+            nav_destination = destination or "destination"
+            
+            # Determine travel mode
+            mode = "walking"
+            if any(word in request_lower for word in ["drive", "car", "driving"]):
+                mode = "driving"
+            elif any(word in request_lower for word in ["transit", "train", "bus", "metro"]):
+                mode = "transit"
+            
+            suggested_tools.append({
+                "tool": "local_navigation_social_intelligence",
+                "parameters": {
+                    "origin": origin,
+                    "destination": nav_destination,
+                    "mode": mode,
+                    "caution_preference": "medium"
+                },
+                "reason": f"Get safe {mode} directions with social context"
+            })
+            
+            # Provide immediate basic guidance
+            guidance["navigation_tips"] = {
+                "mode": mode,
+                "general_advice": [
+                    "Download offline maps before traveling",
+                    "Keep emergency contacts readily available",
+                    "Stay aware of your surroundings",
+                    "Have backup navigation methods ready"
+                ],
+                "safety_reminders": [
+                    "Avoid displaying expensive items",
+                    "Trust your instincts about unsafe areas",
+                    "Keep someone informed of your itinerary"
+                ]
+            }
+        
+        # 3. Emergency Preparedness
+        if needs_emergency_phrases:
+            # Determine intent
+            intent = "lost"  # default
+            if any(word in request_lower for word in ["doctor", "medical", "sick"]):
+                intent = "need_doctor"
+            elif any(word in request_lower for word in ["police", "danger", "unsafe"]):
+                intent = "police"
+            
+            # Determine language from destination
+            language = "english"  # default
+            if destination:
+                # Simple mapping - in production, use proper language detection
+                lang_map = {
+                    "japan": "japanese", "tokyo": "japanese", "osaka": "japanese",
+                    "france": "french", "paris": "french",
+                    "spain": "spanish", "madrid": "spanish",
+                    "germany": "german", "berlin": "german",
+                    "italy": "italian", "rome": "italian"
+                }
+                for place, lang in lang_map.items():
+                    if place in destination.lower():
+                        language = lang
+                        break
+            
+            suggested_tools.append({
+                "tool": "emergency_phrase_generator",
+                "parameters": {
+                    "intent": intent,
+                    "language": language,
+                    "politeness_level": "formal"
+                },
+                "reason": f"Learn essential {language} phrases for {intent} situations"
+            })
+            
+            # Provide immediate basic guidance
+            guidance["emergency_preparation"] = {
+                "language": language,
+                "essential_info": [
+                    "Save local emergency numbers in your phone",
+                    "Keep your embassy contact information handy",
+                    "Have your accommodation address written down",
+                    "Carry identification and important documents"
+                ],
+                "basic_phrases_needed": [
+                    "Help/Emergency", "I'm lost", "Call police/doctor",
+                    "I don't speak [local language]", "Thank you"
+                ]
+            }
+        
+        # 4. Social Dynamics Awareness
+        if needs_social_dynamics and destination:
+            # Extract time context
+            time_context = "daytime"
+            if any(t in request_lower for t in ["evening", "night", "late"]):
+                time_context = "evening"
+            elif any(t in request_lower for t in ["morning", "early"]):
+                time_context = "morning"
+            
+            suggested_tools.append({
+                "tool": "local_social_dynamics_decoder",
+                "parameters": {
+                    "city": destination,
+                    "country": destination,  # Simplified - in production, separate city/country
+                    "time_of_day": time_context,
+                    "context": "General travel context"
+                },
+                "reason": f"Understand {destination} social norms for {time_context}"
+            })
+            
+            # Provide immediate basic guidance
+            guidance["social_awareness"] = {
+                "time_context": time_context,
+                "general_advice": [
+                    "Observe local behavior and follow suit",
+                    "Be respectful of personal space norms",
+                    "Learn appropriate greeting customs",
+                    "Understand local communication styles"
+                ]
+            }
+        
+        # 5. Memory Management
+        if wants_to_save_memory:
+            suggested_tools.append({
+                "tool": "travel_memory_archive",
+                "parameters": {
+                    "action": "save",
+                    "user_id": user_id,
+                    "title": f"Travel Plan: {travel_request[:50]}...",
+                    "text": f"Travel request: {travel_request}",
+                    "tags": ["intelligent_agent", "travel_planning"]
+                },
+                "reason": "Save this travel plan for future reference"
+            })
+        
+        # Add menu analysis suggestion if dietary restrictions mentioned
+        if dietary_restrictions or any(word in request_lower for word in ["food", "restaurant", "eat", "menu", "dining"]):
+            guidance["dining_assistance"] = {
+                "dietary_info": dietary_restrictions or ["No specific restrictions mentioned"],
+                "recommendations": [
+                    "Use the menu_intelligence tool when you find restaurants",
+                    "Take photos of menus for allergen analysis",
+                    "Learn how to communicate dietary restrictions in local language",
+                    "Research local cuisine that matches your preferences"
+                ]
+            }
+        
+        # Synthesize unified response
+        unified_response = {
+            "request_analysis": {
+                "original_request": travel_request,
+                "detected_locations": locations,
+                "identified_needs": {
+                    "cultural_guidance": needs_cultural_context,
+                    "navigation_help": needs_navigation,
+                    "emergency_preparation": needs_emergency_phrases,
+                    "social_awareness": needs_social_dynamics,
+                    "dining_assistance": needs_menu_help,
+                    "memory_keeping": wants_to_save_memory
+                }
+            },
+            "suggested_tools": suggested_tools,
+            "immediate_guidance": guidance
+        }
+        
+        # Create a human-friendly summary
+        summary_parts = []
+        
+        if "cultural_tips" in guidance:
+            summary_parts.append("🏛️ **Cultural Preparation**: Research local customs, greetings, and etiquette")
+        
+        if "navigation_tips" in guidance:
+            nav_info = guidance["navigation_tips"]
+            summary_parts.append(f"🗺️ **Navigation**: Plan {nav_info['mode']} route with safety considerations")
+        
+        if "emergency_preparation" in guidance:
+            emerg_info = guidance["emergency_preparation"]
+            summary_parts.append(f"🆘 **Emergency Ready**: Learn key {emerg_info['language']} phrases and safety info")
+        
+        if "social_awareness" in guidance:
+            social_info = guidance["social_awareness"]
+            summary_parts.append(f"👥 **Social Awareness**: Understand {social_info['time_context']} social norms")
+        
+        if "dining_assistance" in guidance:
+            dietary_info = guidance["dining_assistance"]["dietary_info"]
+            summary_parts.append(f"🍽️ **Dining**: Prepared for {', '.join(dietary_info)} dietary needs")
+        
+        unified_response["summary"] = "\n".join(summary_parts) if summary_parts else "✈️ Travel assistance provided based on your request."
+        
+        # Add next steps for tools to use
+        next_steps = []
+        for tool_suggestion in suggested_tools:
+            tool_name = tool_suggestion["tool"]
+            reason = tool_suggestion["reason"]
+            next_steps.append(f"� Use `{tool_name}` to {reason.lower()}")
+        
+        # Add general next steps
+        if not any("menu_intelligence" in step for step in next_steps):
+            next_steps.append("� Use `menu_intelligence` when you find restaurants - take photos for analysis")
+        
+        if not wants_to_save_memory and not any("travel_memory_archive" in step for step in next_steps):
+            next_steps.append("💾 Use `travel_memory_archive` to save important experiences")
+        
+        unified_response["next_steps"] = next_steps
+        
+        return ok(unified_response)
+        
     except Exception as e:
-        raise McpError(ErrorData(code=INTERNAL_ERROR, message=str(e)))
+        return ok({
+            "request_analysis": {
+                "original_request": travel_request,
+                "error": f"Failed to process request: {str(e)}"
+            },
+            "suggested_tools": [],
+            "immediate_guidance": {},
+            "summary": f"❌ Error processing travel request: {str(e)}",
+            "next_steps": ["Try simplifying your request or use individual tools directly"]
+        })
+
+## Removed: job_finder (not needed)
+
+## Removed: make_img_black_and_white (not needed)
 
 # --- Run MCP Server ---
 async def main():
