@@ -2138,7 +2138,7 @@ Focus on providing actionable, bookable options with real pricing and timing inf
 
         # Create the model with specific configuration for transport search
         model = genai.GenerativeModel(
-            model_name="gemini-1.5-pro",
+            model_name="gemini-2.5-flash-lite",
             system_instruction=system_prompt,
             generation_config=genai.types.GenerationConfig(
                 temperature=0.3,  # Lower temperature for more factual responses
