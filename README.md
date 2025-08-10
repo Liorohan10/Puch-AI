@@ -1,225 +1,284 @@
-# Puch AI - Intelligent Travel Assistant
 
-This is a starter template for creating your own Model Context Protocol (MCP) server that works with Puch AI, supercharged with a suite of travel tools and an intelligent orchestrating agent.
+# 🌍 Puch AI Travel Assistant - WhatsApp User Guide
 
-## What is MCP?
+Welcome to **Puch AI**, your intelligent travel companion! Get instant, detailed travel assistance through WhatsApp with real-time data and cultural intelligence.
 
-MCP (Model Context Protocol) allows AI assistants like Puch to connect to external tools and data sources safely. Think of it as giving your AI extra superpowers without compromising security.
+## 🚀 **What is Puch AI?**
 
-## What's Included in This Starter?
+Puch AI is an advanced AI-powered travel assistant that provides:
+- **Real-time restaurant recommendations** with detailed guides
+- **Cultural intelligence** and etiquette guidance
+- **Safe navigation** with social awareness
+- **Emergency assistance** and local phrase translations
+- **Authentic local experiences** beyond tourist spots
 
-This starter has been transformed into a powerful **AI Travel Assistant** with a suite of tools designed to help you navigate the world with confidence.
-
-### 🧠 Intelligent Travel Agent
-The core of this assistant. It understands complex travel requests, automatically selects the right tools for the job, and provides a unified, actionable plan.
-
-### �️ Core Travel Tools
-- **Cultural Context Predictor**: Get crucial do's and don'ts, etiquette, and behavioral insights for any country.
-- **Local Social Dynamics Decoder**: Understand local norms and get advice based on your specific location and time of day.
-- **Emergency Phrase Generator**: Instantly get essential emergency phrases in the local language.
-- **Menu Intelligence**: Analyze a photo of a menu to get translations, allergen warnings, and recommendations. Powered by Google Gemini Vision with a Tesseract OCR fallback.
-- **Local Navigation with Social Intelligence**: Plan walking, driving, or transit routes with added safety and social context.
-- **Travel Memory Archive**: Save and retrieve your travel experiences, photos, and AI-generated insights.
-
-## Quick Setup Guide
-
-### Step 1: Install Dependencies
-
-First, make sure you have Python 3.11 or higher installed.
-
-```bash
-# Create virtual environment (if you haven't already)
-python -m venv .venv
-
-# Activate the environment
-# On Windows (Git Bash/WSL):
-source .venv/bin/activate
-# On macOS/Linux:
-source .venv/bin/activate
-
-# Install all required packages
-pip install -r requirements.txt 
-# Or if using uv:
-# uv sync
-```
-*Note: A `pyproject.toml` is provided, which can be used with tools like `uv` or `pip`.*
-
-### Step 2: Set Up Environment Variables
-
-Create a `.env` file in the project root (`Puch-AI/.env`):
-
-```bash
-# Create an empty .env file
-touch .env
-```
-
-Then edit `.env` and add your details:
-
-```env
-# Required by Puch AI
-AUTH_TOKEN="your_secret_token_here"
-MY_NUMBER="Your Number with countrycode attached(eg: 918366XXXXXX)"
-
-# For Menu Intelligence Tool (Optional but Recommended)
-GEMINI_API_KEY="your_google_ai_gemini_api_key"
-
-# For Tesseract OCR Fallback (Optional)
-# Only needed if 'tesseract' is not in your system's PATH
-# TESSERACT_CMD="/path/to/your/tesseract"
-```
-
-**Important Notes:**
-- `AUTH_TOKEN`: Your secret token for authentication. Keep it safe!
-- `MY_NUMBER`: Your WhatsApp number in the format `{country_code}{number}`.
-- `GEMINI_API_KEY`: Highly recommended for the best menu analysis results. Get one from [Google AI Studio](https://aistudio.google.com/app/apikey).
-- `TESSERACT_CMD`: Only necessary if the Tesseract OCR engine isn't globally installed and accessible from your terminal.
-
-### Step 3: Run the Server
-
-```bash
-# From the root Puch-AI directory
-python mcp-bearer-token/mcp_starter.py
-```
-
-You'll see: `🚀 Starting MCP server on http://0.0.0.0:8086`
-
-### Step 4: Make It Public (Required by Puch)
-
-Since Puch needs to access your server over HTTPS, you need to expose your local server.
-
-#### Using ngrok (Recommended)
-
-1. **Install ngrok:**
-   Download from https://ngrok.com/download
-
-2. **Get your authtoken:**
-   - Go to https://dashboard.ngrok.com/get-started/your-authtoken
-   - Copy your authtoken
-   - Run: `ngrok config add-authtoken YOUR_AUTHTOKEN`
-
-3. **Start the tunnel:**
-   ```bash
-   ngrok http 8086
-   ```
-You will get a public HTTPS URL. This is what you'll use to connect with Puch AI.
-
-## How to Use the Intelligent Travel Agent
-
-Once your server is running and exposed via ngrok, you can interact with the agent using `curl` or any HTTP client.
-
-### Example Request
-
-Here's an example of a complex travel request that uses multiple tools at once. Replace `YOUR_NGROK_URL` and `YOUR_AUTH_TOKEN` accordingly.
-
-```bash
-curl -X POST YOUR_NGROK_URL/mcp/tools/intelligent_travel_agent \
-  -H "Authorization: Bearer YOUR_AUTH_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "travel_request": "I am planning to visit Tokyo tomorrow from the USA. I want to walk from Shibuya to Harajuku and need cultural etiquette tips and emergency phrases.",
-    "user_id": "demo_user",
-    "home_country": "USA",
-    "current_location": "Shibuya Station"
-  }'
-```
-
-### Expected Response
-
-The agent will analyze the request, call the necessary tools in the background, and return a synthesized plan:
-
-```json
-{
-  "ok": true,
-  "data": {
-    "request_analysis": {
-      "identified_needs": {
-        "cultural_guidance": true,
-        "navigation_help": true,
-        "emergency_preparation": true
-      }
-    },
-    "orchestrated_results": {
-      "cultural_context": { "... (cultural insights) ..." },
-      "navigation": { "... (route steps) ..." },
-      "emergency_phrases": { "... (translated phrase) ..." }
-    },
-    "summary": "🏛️ Cultural Tips: ... \n🗺️ Route: ... \n🆘 Emergency Phrase: ...",
-    "next_steps": [ "📸 Take a photo of any menu for analysis..." ]
-  }
-}
-```
-
-## How to Connect with Puch AI
-
-1. **[Open Puch AI](https://wa.me/+919998881729)** in your browser.
-2. **Start a new conversation.**
-3. **Use the connect command** with your public ngrok URL:
-   `/connect YOUR_NGROK_URL/mcp`
-4. **Provide your AUTH_TOKEN** when prompted.
-
-Once connected, you can interact with your travel assistant directly through Puch AI!
-   ```
-   /mcp connect https://your-domain.ngrok.app/mcp your_secret_token_here
-   ```
-
-### Debug Mode
-
-To get more detailed error messages:
-
-```
-/mcp diagnostics-level debug
-```
-
-## Customizing the Starter
-
-### Adding New Tools
-
-1. **Create a new tool function:**
-   ```python
-   @mcp.tool(description="Your tool description")
-   async def your_tool_name(
-       parameter: Annotated[str, Field(description="Parameter description")]
-   ) -> str:
-       # Your tool logic here
-       return "Tool result"
-   ```
-
-2. **Add required imports** if needed
-
-
-## 📚 **Additional Documentation Resources**
-
-### **Official Puch AI MCP Documentation**
-- **Main Documentation**: https://puch.ai/mcp
-- **Protocol Compatibility**: Core MCP specification with Bearer & OAuth support
-- **Command Reference**: Complete MCP command documentation
-- **Server Requirements**: Tool registration, validation, HTTPS requirements
-
-### **Technical Specifications**
-- **JSON-RPC 2.0 Specification**: https://www.jsonrpc.org/specification (for error handling)
-- **MCP Protocol**: Core protocol messages, tool definitions, authentication
-
-### **Supported vs Unsupported Features**
-
-**✓ Supported:**
-- Core protocol messages
-- Tool definitions and calls
-- Authentication (Bearer & OAuth)
-- Error handling
-
-**✗ Not Supported:**
-- Videos extension
-- Resources extension
-- Prompts extension
-
-## Getting Help
-
-- **Join Puch AI Discord:** https://discord.gg/VMCnMvYx
-- **Check Puch AI MCP docs:** https://puch.ai/mcp
-- **Puch WhatsApp Number:** +91 99988 81729
+All powered by **Google Gemini AI** with **real-time web search** for the most current information.
 
 ---
 
-**Happy coding! 🚀**
+## 🎯 **How to Use Puch AI on WhatsApp**
 
-Use the hashtag `#BuildWithPuch` in your posts about your MCP!
+Simply send a message to our WhatsApp number with your travel question or request. Our AI understands natural language, so speak normally!
+
+### 📱 **Basic Command Format:**
+Just type your question naturally - no special commands needed!
+
+**Example:** *"I'm visiting Tokyo tomorrow and need restaurant recommendations"*
+
+---
+
+## 🏛️ **Cultural Intelligence & Etiquette**
+
+Get detailed cultural guidance to respect local customs and avoid cultural mistakes.
+
+### 💬 **What to Say:**
+- *"I'm traveling from USA to Japan. What cultural etiquette should I know?"*
+- *"What are the cultural do's and don'ts in India for business meetings?"*
+- *"How should I behave respectfully in Morocco as a solo female traveler?"*
+- *"What are the taboos I should avoid in Thailand?"*
+
+### 🎁 **What You Get:**
+- **Greetings & Manners**: Proper ways to greet, personal space, eye contact
+- **Cultural Taboos**: Behaviors to avoid, dress codes, offensive gestures
+- **Business Etiquette**: Meeting protocols, business cards, communication styles
+- **Dining Customs**: Table manners, meal timing, tipping practices
+- **Current Insights**: Recent cultural shifts, festivals, local attitudes
+
+---
+
+## 🍽️ **Restaurant Discovery & Food Intelligence**
+
+Discover authentic local cuisine with comprehensive restaurant guides and cultural dining context.
+
+### 💬 **What to Say:**
+- *"Find me authentic restaurants in Bangkok. I'm vegetarian with nut allergies"*
+- *"I want local food recommendations in Paris with medium budget"*
+- *"Best street food in Mumbai that's safe for tourists"*
+- *"Recommend restaurants in Tokyo for spicy food lovers"*
+- *"Where can I find halal food in Barcelona?"*
+
+### 🎁 **What You Get:**
+**🏆 Detailed Restaurant Listings (15-20 venues):**
+- Complete addresses and contact information
+- Operating hours and reservation requirements
+- Price ranges with average meal costs
+- Signature dishes and specialties
+- Current ratings and reviews
+- Allergen information and safety notes
+- Pro tips and insider recommendations
+
+**🥘 Authentic Local Dishes (8-12 specialties):**
+- Local and English dish names
+- Cultural significance and origin stories
+- Detailed ingredients and preparation methods
+- Spice levels and flavor profiles
+- Best restaurants for each dish
+- Pricing and ordering tips
+
+**🗺️ Food Districts & Markets (5-7 areas):**
+- Specific neighborhoods and their specialties
+- Best times to visit and transportation
+- Must-visit stalls and hidden gems
+- Budget expectations for each area
+
+**🎭 Dining Culture Guide:**
+- Local meal timing and customs
+- Table manners and etiquette
+- Payment methods and tipping standards
+- Dress codes and reservation protocols
+
+---
+
+## 🗺️ **Smart Navigation & Safety**
+
+Get safe routes with social intelligence and local awareness.
+
+### 💬 **What to Say:**
+- *"Safest walking route from Eiffel Tower to Louvre at night"*
+- *"How to navigate Tokyo metro during rush hour"*
+- *"Safe way to get around Bangkok markets as a tourist"*
+- *"Best route from my hotel to the old town in Prague"*
+
+### 🎁 **What You Get:**
+- **Route Analysis**: Best paths for walking, driving, or transit
+- **Safety Intelligence**: Areas to be cautious of, common scams
+- **Social Awareness**: Local behavior patterns and crowd dynamics
+- **Timing Guidance**: Peak hours, quiet periods, seasonal factors
+- **Emergency Preparedness**: Backup plans and safety contacts
+
+---
+
+## 🆘 **Emergency Assistance & Local Phrases**
+
+Learn essential phrases and get emergency guidance in local languages.
+
+### 💬 **What to Say:**
+- *"I need emergency medical phrases in Japanese"*
+- *"How do I ask for help in Spanish if I'm lost?"*
+- *"Essential German phrases for emergencies"*
+- *"I need to call police in Bangkok - what should I say?"*
+
+### 🎁 **What You Get:**
+- **Emergency Phrases**: "Help", "Call police/doctor", "I'm lost"
+- **Pronunciation Guides**: Easy-to-follow phonetic instructions
+- **Cultural Context**: Appropriate formality levels and etiquette
+- **Emergency Numbers**: Local emergency contacts and procedures
+- **Situational Phrases**: Specific help for medical, police, or navigation needs
+
+---
+
+## 👥 **Local Social Intelligence**
+
+Understand local social dynamics and behavior patterns.
+
+### 💬 **What to Say:**
+- *"How do locals behave in Rome cafes during morning hours?"*
+- *"What's the social scene like in Bangkok night markets?"*
+- *"How should I act in Japanese temples and shrines?"*
+- *"Social customs for business networking in Singapore"*
+
+### 🎁 **What You Get:**
+- **Social Norms**: How locals interact in different settings
+- **Behavior Guidance**: Appropriate volume levels and communication
+- **Cultural Sensitivity**: Respectful behavior in religious/cultural sites
+- **Time-Specific Insights**: Different behaviors throughout the day
+- **Safety Awareness**: Social cues and situational awareness
+
+---
+
+## 🤖 **Intelligent Travel Planning**
+
+Get comprehensive travel assistance that combines multiple services automatically.
+
+### 💬 **What to Say:**
+- *"Plan a food tour in Mumbai. I'm vegetarian, need cultural tips, and safe navigation"*
+- *"Help me explore Istanbul safely. I need restaurants, cultural guidance, and emergency phrases"*
+- *"I want an authentic Bangkok experience with street food, local customs, and safety tips"*
+- *"Plan my evening in Rome with dinner recommendations and cultural etiquette"*
+
+### 🎁 **What You Get:**
+- **Multi-Service Integration**: Combines restaurants, culture, navigation, and safety
+- **Personalized Planning**: Tailored to your preferences and restrictions
+- **Comprehensive Guides**: Everything you need in one response
+- **Priority Recommendations**: Most important information highlighted
+- **Action Steps**: Clear next steps and tool suggestions
+
+---
+
+## 💾 **Travel Memory Archive**
+
+Save and recall your travel experiences and discoveries.
+
+### 💬 **What to Say:**
+- *"Save this memory: Found amazing gelato at Giolitti in Rome"*
+- *"Remember: Best ramen shop in Tokyo is Ichiran in Shibuya"*
+- *"Show me my saved travel memories"*
+- *"Keep this note: Avoid the tourist traps near Colosseum"*
+
+### 🎁 **What You Get:**
+- **Memory Storage**: Save restaurants, experiences, and travel tips
+- **Easy Retrieval**: Access your saved memories anytime
+- **Personal Travel Journal**: Build your own curated travel guide
+- **Shareable Insights**: Remember details to share with friends
+
+---
+
+## 🌟 **Special Features**
+
+### 🆕 **First-Time User Welcome**
+New users receive a comprehensive feature overview and travel assistant introduction.
+
+### 🌱 **Seasonal Intelligence** 
+All recommendations include current seasonal considerations (August 2025 specific):
+- Seasonal ingredients and dishes
+- Current food festivals and events
+- Weather-appropriate dining recommendations
+- Tourist vs local experiences
+
+### 🚨 **Advanced Allergen Management**
+Comprehensive allergen safety with:
+- Detailed allergen information for each dish
+- Safe restaurant recommendations
+- Local communication phrases for allergies
+- Emergency procedures for allergic reactions
+
+### 🎯 **Real-Time Data**
+All information powered by:
+- **Google Gemini AI** with **real-time web search**
+- Current restaurant information and reviews
+- Up-to-date cultural insights and events
+- Live safety and navigation data
+
+---
+
+## 📱 **Sample Conversations**
+
+### 🍜 **Food Discovery Example:**
+**You:** *"I'm visiting Bangkok tomorrow. I love spicy food but have shellfish allergy. Recommend authentic places."*
+
+**Puch AI:** *Provides detailed guide with 15-20 restaurants, 8-10 local spicy dishes (all shellfish-free), food districts, cultural dining tips, and allergen safety guidance.*
+
+### 🏛️ **Cultural Guidance Example:**
+**You:** *"Business trip to Japan next week. What cultural etiquette should I know?"*
+
+**Puch AI:** *Comprehensive cultural guide covering business card exchange, meeting protocols, dining etiquette, gift-giving customs, and current Japanese business practices.*
+
+### 🗺️ **Navigation Example:**
+**You:** *"Safe walking route from my hotel to Shibuya crossing at night?"*
+
+**Puch AI:** *Detailed route with safety considerations, social dynamics of night-time Tokyo, crowd patterns, alternative paths, and emergency contacts.*
+
+---
+
+## 🎪 **Pro Tips for Best Results**
+
+### ✅ **Be Specific:**
+- Mention your location and destination
+- Include dietary restrictions or allergies
+- Specify your budget level (low/medium/high)
+- Mention any cultural or religious considerations
+
+### ✅ **Ask Natural Questions:**
+- No need for special commands - just speak naturally
+- Ask follow-up questions for more details
+- Combine multiple needs in one message
+
+### ✅ **Use Context:**
+- Mention if you're traveling for business or leisure
+- Include your travel dates for seasonal recommendations
+- Specify group size and demographics if relevant
+
+---
+
+## 🌍 **Supported Worldwide**
+
+Puch AI provides assistance for destinations worldwide, with particularly detailed coverage for:
+- **Asia**: Japan, Thailand, India, Singapore, South Korea, China
+- **Europe**: France, Italy, Germany, Spain, UK, Netherlands
+- **Americas**: USA, Mexico, Brazil, Argentina, Canada
+- **Middle East & Africa**: UAE, Morocco, Turkey, Egypt, South Africa
+- **Oceania**: Australia, New Zealand
+
+---
+
+## 🔒 **Privacy & Safety**
+
+- **No personal data stored** beyond travel memories you choose to save
+- **Real-time data** ensures current and accurate information
+- **Cultural sensitivity** built into all recommendations
+- **Safety-first approach** in all navigation and social guidance
+
+---
+
+## 📞 **Get Started**
+
+Ready to explore the world with confidence? Send your first message to Puch AI on WhatsApp and discover authentic travel experiences with intelligent guidance!
+
+**Example starter messages:**
+- *"Hi Puch AI! I'm planning a trip to [destination]. Can you help?"*
+- *"I need restaurant recommendations for [city] with [dietary requirements]"*
+- *"What cultural etiquette should I know for [country]?"*
+
+---
+
+*Powered by Puch AI - Your Intelligent Travel Companion* 🌟✈️
