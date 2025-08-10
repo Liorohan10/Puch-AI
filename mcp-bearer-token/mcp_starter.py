@@ -1877,6 +1877,8 @@ def server_status() -> str:
                 "travel_advisor",
                 "restaurant_discovery_tool", 
                 "web_content_extractor",
+                "flight_and_transport_search",
+                "smart_travel_search",
                 "health_check",
                 "server_status"
             ],
@@ -1898,6 +1900,314 @@ def server_status() -> str:
             "timestamp": datetime.now().isoformat(),
             "error": str(e)
         }
+        return json.dumps(error_response, indent=2)
+
+# ===== FLIGHT AND TRANSPORT SEARCH TOOL =====
+
+def parse_travel_query(query: str) -> dict:
+    """
+    Helper function to extract travel parameters from natural language queries.
+    
+    Args:
+        query: Natural language travel query
+        
+    Returns:
+        Dictionary with extracted parameters
+    """
+    import re
+    from datetime import datetime
+    
+    # Initialize default values
+    parsed = {
+        "origin": "",
+        "destination": "", 
+        "travel_date": "",
+        "transport_type": "all"
+    }
+    
+    # Convert to lowercase for pattern matching
+    query_lower = query.lower()
+    
+    # Extract transport type preferences
+    if any(word in query_lower for word in ["flight", "flights", "fly", "air"]):
+        parsed["transport_type"] = "flights"
+    elif any(word in query_lower for word in ["train", "trains", "railway"]):
+        parsed["transport_type"] = "trains"
+    elif any(word in query_lower for word in ["bus", "buses"]):
+        parsed["transport_type"] = "buses"
+    elif "all" in query_lower or "modes" in query_lower:
+        parsed["transport_type"] = "all"
+    
+    # Extract origin and destination with correct logic
+    # "travel to X from Y" means: going FROM Y TO X (Y=origin, X=destination)
+    travel_to_from_pattern = r"travel\s+to\s+([a-zA-Z\s]+?)\s+from\s+([a-zA-Z\s]+?)(?:\s+on|\s+for|\s*$)"
+    travel_match = re.search(travel_to_from_pattern, query, re.IGNORECASE)
+    
+    if travel_match:
+        parsed["destination"] = travel_match.group(1).strip().title()  # X (where going TO)
+        parsed["origin"] = travel_match.group(2).strip().title()       # Y (where coming FROM)
+    else:
+        # Try "from X to Y" pattern
+        from_to_pattern = r"from\s+([a-zA-Z\s]+?)\s+to\s+([a-zA-Z\s]+?)(?:\s+on|\s+for|\s*$)"
+        from_to_match = re.search(from_to_pattern, query, re.IGNORECASE)
+        
+        if from_to_match:
+            parsed["origin"] = from_to_match.group(1).strip().title()      # X (FROM)
+            parsed["destination"] = from_to_match.group(2).strip().title() # Y (TO)
+    
+    # Extract date patterns
+    # Pattern: "on 28th August 2025", "on 2025-08-28", etc.
+    date_patterns = [
+        r"on\s+(\d{1,2}(?:st|nd|rd|th)?\s+[a-zA-Z]+\s+\d{4})",  # "28th August 2025"
+        r"on\s+(\d{4}-\d{2}-\d{2})",  # "2025-08-28"
+        r"(\d{1,2}(?:st|nd|rd|th)?\s+[a-zA-Z]+\s+\d{4})",  # "28th August 2025"
+        r"(\d{4}-\d{2}-\d{2})"  # "2025-08-28"
+    ]
+    
+    for pattern in date_patterns:
+        date_match = re.search(pattern, query, re.IGNORECASE)
+        if date_match:
+            parsed["travel_date"] = date_match.group(1).strip()
+            break
+    
+    return parsed
+
+@mcp.tool()
+def smart_travel_search(query: str) -> str:
+    """
+    Intelligent travel search that parses natural language queries and finds transport options.
+    
+    Args:
+        query: Natural language travel query (e.g., "I want to travel from Delhi to Mumbai on 15th September 2025")
+        
+    Returns:
+        Comprehensive transport information based on the parsed query
+    """
+    log_input("smart_travel_search", query=query)
+    
+    USAGE["smart_travel_search"] = USAGE.get("smart_travel_search", 0) + 1
+    
+    try:
+        # Parse the natural language query
+        parsed_params = parse_travel_query(query)
+        
+        # Validate required parameters
+        if not parsed_params["origin"] or not parsed_params["destination"]:
+            return json.dumps({
+                "error": "Could not extract origin and destination from query",
+                "query": query,
+                "suggestion": "Please specify your departure and arrival cities clearly",
+                "example": "I want to travel from Kolkata to Moscow on 28th August 2025",
+                "parsed_parameters": parsed_params
+            }, indent=2)
+        
+        if not parsed_params["travel_date"]:
+            return json.dumps({
+                "error": "Could not extract travel date from query", 
+                "query": query,
+                "suggestion": "Please specify your travel date",
+                "example": "I want to travel from Kolkata to Moscow on 28th August 2025",
+                "parsed_parameters": parsed_params
+            }, indent=2)
+        
+        # Call the main flight search tool with parsed parameters
+        result = flight_and_transport_search(
+            origin=parsed_params["origin"],
+            destination=parsed_params["destination"],
+            travel_date=parsed_params["travel_date"],
+            transport_type=parsed_params["transport_type"]
+        )
+        
+        # Parse the result and add query parsing info
+        result_data = json.loads(result)
+        result_data["original_query"] = query
+        result_data["parsed_parameters"] = parsed_params
+        result_data["query_processing"] = {
+            "auto_extracted": True,
+            "extraction_confidence": "high" if all(parsed_params.values()) else "medium"
+        }
+        
+        log_output("smart_travel_search", result_data, success=True)
+        return json.dumps(result_data, indent=2)
+        
+    except Exception as e:
+        log_error("smart_travel_search", e)
+        return json.dumps({
+            "error": f"Smart travel search failed: {str(e)}",
+            "query": query,
+            "timestamp": get_timestamp()
+        }, indent=2)
+
+@mcp.tool()
+def flight_and_transport_search(
+    origin: str,
+    destination: str,
+    travel_date: str,
+    transport_type: str = "all"
+) -> str:
+    """
+    Search for flights and transport options between two cities with detailed timing and pricing information.
+    
+    Args:
+        origin: Departure city/location (e.g., "Kolkata", "Delhi", "Mumbai")
+        destination: Arrival city/location (e.g., "Moscow", "Bhubaneswar", "Chennai")
+        travel_date: Date of travel in format "DD Month YYYY" or "YYYY-MM-DD" (e.g., "28th August 2025", "2025-08-28")
+        transport_type: Type of transport to search - "flights", "trains", "buses", "all" (default: "all")
+    
+    Returns:
+        Comprehensive transport information with timings, prices, and booking details
+    """
+    
+    log_input("flight_and_transport_search", 
+              origin=origin, 
+              destination=destination, 
+              travel_date=travel_date, 
+              transport_type=transport_type)
+    
+    USAGE["flight_and_transport_search"] = USAGE.get("flight_and_transport_search", 0) + 1
+    
+    try:
+        # Configure Gemini API
+        genai.configure(api_key=GEMINI_API_KEY)
+        
+        # Create optimized prompt for transport search
+        system_prompt = """You are a comprehensive travel search assistant specializing in finding accurate, real-time flight and transport information. Your goal is to provide detailed, actionable transport options with specific timings, prices, and booking information.
+
+SEARCH REQUIREMENTS:
+- Find ALL available transport options for the specified route and date
+- Include multiple airlines, train operators, bus services as applicable
+- Provide specific departure/arrival times, duration, and current pricing
+- Include both direct and connecting options where relevant
+- Mention booking platforms and availability status
+- Consider different class options (Economy, Business, etc.)
+
+RESPONSE FORMAT:
+Structure your response with clear sections:
+1. FLIGHT OPTIONS (if applicable)
+2. TRAIN OPTIONS (if applicable) 
+3. BUS OPTIONS (if applicable)
+4. OTHER TRANSPORT (if applicable)
+5. BOOKING RECOMMENDATIONS
+6. TRAVEL TIPS
+
+For each option include:
+- Operator/Airline name
+- Departure time and arrival time
+- Total journey duration
+- Current price range (in local currency)
+- Aircraft/vehicle type
+- Stops/connections (if any)
+- Booking platform/website
+- Availability status
+- Class options available
+
+IMPORTANT GUIDELINES:
+- Use current 2025 pricing and schedules
+- Include budget, mid-range, and premium options
+- Mention peak/off-peak pricing variations
+- Provide alternative dates if better options exist
+- Include practical booking advice
+- Consider visa requirements for international travel
+- Mention baggage allowances and restrictions
+- Include ground transport to/from airports/stations
+
+ACCURACY FOCUS:
+- Verify route feasibility (some destinations may not have direct connections)
+- Consider time zones for international travel
+- Include realistic travel times and connections
+- Mention seasonal variations in service
+- Provide backup options in case primary choices are unavailable"""
+
+        user_query = f"""
+I need comprehensive transport information for the following journey:
+
+FROM: {origin}
+TO: {destination}
+DATE: {travel_date}
+TRANSPORT TYPE: {transport_type}
+
+Please provide detailed information about ALL available transport options including:
+- Specific flight/train/bus schedules with exact timings
+- Current pricing for different classes/categories
+- Booking platforms and availability
+- Alternative options and recommendations
+- Practical travel advice for this specific route
+
+Focus on providing actionable, bookable options with real pricing and timing information that I can use to make an informed decision.
+"""
+
+        # Create the model with specific configuration for transport search
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-pro",
+            system_instruction=system_prompt,
+            generation_config=genai.types.GenerationConfig(
+                temperature=0.3,  # Lower temperature for more factual responses
+                top_p=0.8,
+                top_k=40,
+                max_output_tokens=4000,
+                candidate_count=1
+            )
+        )
+        
+        # Generate the response
+        response = model.generate_content(user_query)
+        
+        if not response or not response.text:
+            fallback_result = {
+                "error": "No transport information generated",
+                "route": f"{origin} → {destination}",
+                "date": travel_date,
+                "suggestion": "Try refining your search with more specific city names or alternative dates"
+            }
+            log_output("flight_and_transport_search", fallback_result, success=False)
+            return json.dumps(fallback_result, indent=2)
+        
+        # Structure the response
+        transport_data = {
+            "search_query": {
+                "origin": origin,
+                "destination": destination,
+                "travel_date": travel_date,
+                "transport_type": transport_type,
+                "search_timestamp": get_timestamp()
+            },
+            "transport_information": response.text,
+            "search_tips": [
+                "Compare prices across multiple booking platforms",
+                "Consider flexible dates for better deals",
+                "Book in advance for international flights",
+                "Check visa requirements for international travel",
+                "Verify baggage allowances and restrictions",
+                "Consider travel insurance for international trips"
+            ],
+            "booking_platforms": {
+                "flights": ["Google Flights", "Skyscanner", "Kayak", "MakeMyTrip", "GoAir", "IndiGo"],
+                "trains": ["IRCTC", "RailYatri", "ConfirmTkt", "Trainman"],
+                "buses": ["RedBus", "AbhiBus", "Paytm Travel", "MakeMyTrip"]
+            },
+            "important_notes": [
+                "Prices are subject to change and availability",
+                "Always verify schedules on official websites",
+                "Consider peak season surcharges",
+                "International travel may require additional documentation"
+            ]
+        }
+        
+        log_output("flight_and_transport_search", transport_data, success=True)
+        return json.dumps(transport_data, indent=2)
+        
+    except Exception as e:
+        log_error("flight_and_transport_search", e)
+        
+        error_response = {
+            "error": f"Transport search failed: {str(e)}",
+            "route": f"{origin} → {destination}",
+            "date": travel_date,
+            "transport_type": transport_type,
+            "timestamp": get_timestamp(),
+            "suggestion": "Please try again with different search parameters or check your internet connection"
+        }
+        
         return json.dumps(error_response, indent=2)
 
 # --- Run MCP Server ---
