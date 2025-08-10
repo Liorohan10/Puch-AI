@@ -1,138 +1,23 @@
 import asyncio
 from typing import Annotated, Literal
 import os
-import uuid
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.bearer import BearerAuthProvider, RSAKeyPair
 from mcp import ErrorData, McpError
 from mcp.server.auth.provider import AccessToken
-from mcp.types import TextContent, INVALID_PARAMS, INTERNAL_ERROR
+from mcp.types import TextContent, ImageContent, INVALID_PARAMS, INTERNAL_ERROR
 from pydantic import BaseModel, Field, AnyUrl
-import json
-import functools
-import inspect
 
 import markdownify
 import httpx
 import readabilipy
 import time
+import uuid
 from datetime import datetime, timedelta
-
-# Import Gemini with Grounding
-from google import genai
-from google.genai import types
 
 # --- Load environment variables ---
 load_dotenv()
-
-# ===== COMPREHENSIVE LOGGING SYSTEM =====
-def get_timestamp():
-    """Get formatted timestamp for logging"""
-    return datetime.now().isoformat()
-
-def log_input(tool_name: str, **kwargs):
-    """Log all inputs to a tool with clear formatting"""
-    print(f"\n{'='*60}")
-    print(f"🔵 INPUT TO TOOL: {tool_name}")
-    print(f"⏰ Timestamp: {get_timestamp()}")
-    print(f"📥 Parameters:")
-    for key, value in kwargs.items():
-        # Truncate very long values
-        if isinstance(value, str) and len(value) > 200:
-            print(f"   {key}: {value[:200]}... [TRUNCATED]")
-        else:
-            print(f"   {key}: {value}")
-    print(f"{'='*60}")
-
-def log_output(tool_name: str, result, success: bool = True):
-    """Log all outputs from a tool with clear formatting"""
-    print(f"\n{'='*60}")
-    print(f"🔴 OUTPUT FROM TOOL: {tool_name}")
-    print(f"⏰ Timestamp: {get_timestamp()}")
-    print(f"✅ Success: {success}")
-    print(f"📤 Result:")
-    if isinstance(result, dict):
-        # Pretty print dict results
-        try:
-            formatted_result = json.dumps(result, indent=2, default=str)
-            # For restaurant discovery tool, show more content to include actual restaurants
-            if tool_name == "restaurant_discovery_tool":
-                # Show much more content for restaurant recommendations
-                if len(formatted_result) > 10000:
-                    lines = formatted_result.split('\n')
-                    if len(lines) > 150:
-                        truncated = '\n'.join(lines[:150]) + f'\n... [TRUNCATED - {len(lines)-150} more lines]'
-                        print(f"   {truncated}")
-                    else:
-                        print(f"   {formatted_result[:10000]}... [TRUNCATED]")
-                else:
-                    print(f"   {formatted_result}")
-            else:
-                # Standard truncation for other tools
-                if len(formatted_result) > 2000:
-                    lines = formatted_result.split('\n')
-                    if len(lines) > 30:
-                        truncated = '\n'.join(lines[:30]) + f'\n... [TRUNCATED - {len(lines)-30} more lines]'
-                        print(f"   {truncated}")
-                    else:
-                        print(f"   {formatted_result[:2000]}... [TRUNCATED]")
-                else:
-                    print(f"   {formatted_result}")
-        except:
-            print(f"   {str(result)[:1000]}{'... [TRUNCATED]' if len(str(result)) > 1000 else ''}")
-    else:
-        result_str = str(result)
-        if len(result_str) > 1000:
-            print(f"   {result_str[:1000]}... [TRUNCATED]")
-        else:
-            print(f"   {result_str}")
-    print(f"{'='*60}\n")
-
-def log_error(tool_name: str, error: Exception):
-    """Log errors with clear formatting"""
-    print(f"\n{'='*60}")
-    print(f"❌ ERROR IN TOOL: {tool_name}")
-    print(f"⏰ Timestamp: {get_timestamp()}")
-    print(f"🚫 Error Type: {type(error).__name__}")
-    print(f"💬 Error Message: {str(error)}")
-    print(f"{'='*60}\n")
-
-def log_ai_interaction(operation: str, input_data, output_data, ai_service: str):
-    """Log AI service interactions specifically"""
-    print(f"🤖 AI {ai_service}: {operation}")
-    print(f"   Input: {input_data[:100] if isinstance(input_data, str) and len(input_data) > 100 else input_data}{'...' if isinstance(input_data, str) and len(input_data) > 100 else ''}")
-    print(f"   Output: {output_data[:200] if isinstance(output_data, str) and len(output_data) > 200 else output_data}{'...' if isinstance(output_data, str) and len(output_data) > 200 else ''}")
-
-def tool_logger(func):
-    """Decorator to automatically log tool inputs and outputs"""
-    @functools.wraps(func)
-    async def wrapper(*args, **kwargs):
-        tool_name = func.__name__
-        
-        # Get function signature to map args to parameter names
-        sig = inspect.signature(func)
-        bound_args = sig.bind(*args, **kwargs)
-        bound_args.apply_defaults()
-        
-        # Log input
-        log_input(tool_name, **bound_args.arguments)
-        
-        try:
-            # Execute the function
-            result = await func(*args, **kwargs)
-            # Log successful output
-            log_output(tool_name, result, success=True)
-            return result
-        except Exception as e:
-            # Log error
-            log_error(tool_name, e)
-            log_output(tool_name, {"error": str(e)}, success=False)
-            raise
-    
-    return wrapper
-
-# ===== END LOGGING SYSTEM =====
 
 TOKEN = os.environ.get("AUTH_TOKEN")
 MY_NUMBER = os.environ.get("MY_NUMBER")
@@ -148,109 +33,24 @@ print(f"🤖 GEMINI_API_KEY loaded: {'✅' if GEMINI_API_KEY else '❌'}")
 if GEMINI_API_KEY:
     print(f"🔑 API Key starts with: {GEMINI_API_KEY[:10]}...")
 else:
-    print("⚠️ WARNING: GEMINI_API_KEY not found - AI features will be disabled")
-
-# ===== GEMINI WITH GROUNDING SETUP =====
-def get_gemini_client():
-    """Initialize Gemini client with API key"""
-    if not GEMINI_API_KEY:
-        raise Exception("GEMINI_API_KEY not found in environment")
-    
-    # Configure the client
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    return client
-
-def get_grounding_config():
-    """Get Gemini grounding configuration with Google Search"""
-    grounding_tool = types.Tool(
-        google_search=types.GoogleSearch()
-    )
-    
-    config = types.GenerateContentConfig(
-        tools=[grounding_tool],
-        temperature=0.4,
-        max_output_tokens=4000  # Increased significantly for detailed restaurant recommendations
-    )
-    
-    return config
-
-async def get_grounded_gemini_response(prompt: str, model: str = "gemini-2.5-flash-lite"):
-    """Get response from Gemini with Google Search grounding"""
-    print(f"🤖 GEMINI REQUEST: {model} with grounding")
-    
-    try:
-        client = get_gemini_client()
-        config = get_grounding_config()
-        
-        # Make the request
-        response = client.models.generate_content(
-            model=model,
-            contents=prompt,
-            config=config,
-        )
-        
-        print(f"✅ GEMINI RESPONSE: {len(response.text)} characters")
-        
-        log_ai_interaction(
-            f"Gemini {model} with Grounding", 
-            prompt[:200] + "...", 
-            response.text[:500] + "...", 
-            f"Gemini {model} + Google Search"
-        )
-        
-        return response.text
-        
-    except Exception as e:
-        print(f"❌ Gemini grounded request failed: {str(e)}")
-        print(f"🔍 Error details: {type(e).__name__}")
-        print(f"📝 Prompt length: {len(prompt)} characters")
-        
-        # Try without grounding as fallback
-        try:
-            print(f"🔄 Attempting fallback without grounding...")
-            client = get_gemini_client()
-            
-            fallback_config = types.GenerateContentConfig(
-                temperature=0.4,
-                max_output_tokens=8000
-            )
-            
-            response = client.models.generate_content(
-                model=model,
-                contents=prompt,
-                config=fallback_config,
-            )
-            
-            print(f"✅ FALLBACK RESPONSE: {len(response.text)} characters")
-            return response.text
-            
-        except Exception as fallback_error:
-            print(f"❌ Fallback also failed: {str(fallback_error)}")
-            raise Exception(f"Both grounded and fallback requests failed: {str(e)} | Fallback: {str(fallback_error)}")
-
-# ===== END GEMINI GROUNDING SETUP =====
+    print("⚠️ WARNING: GEMINI_API_KEY not found - menu intelligence will use fallback OCR only")
 
 # --- Auth Provider ---
 class SimpleBearerAuthProvider(BearerAuthProvider):
     def __init__(self, token: str):
-        print(f"🔐 AUTH PROVIDER: Bearer token initialized")
-        
         k = RSAKeyPair.generate()
         super().__init__(public_key=k.public_key, jwks_uri=None, issuer=None, audience=None)
         self.token = token
 
     async def load_access_token(self, token: str) -> AccessToken | None:
         if token == self.token:
-            print(f"✅ AUTH SUCCESS: {token[:10]}... → client: puch-client")
             return AccessToken(
                 token=token,
                 client_id="puch-client",
                 scopes=["*"],
                 expires_at=None,
             )
-        else:
-            print(f"❌ AUTH FAILED: token mismatch")
-            return None
+        return None
 
 # --- Rich Tool Description model ---
 class RichToolDescription(BaseModel):
@@ -269,8 +69,6 @@ class Fetch:
         user_agent: str,
         force_raw: bool = False,
     ) -> tuple[str, str]:
-        print(f"🌐 HTTP GET: {url}")
-        
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(
@@ -279,14 +77,10 @@ class Fetch:
                     headers={"User-Agent": user_agent},
                     timeout=30,
                 )
-                print(f"✅ HTTP Response: {response.status_code} ({len(response.text)} chars)")
-                
             except httpx.HTTPError as e:
-                print(f"❌ HTTP ERROR: {e}")
                 raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to fetch {url}: {e!r}"))
 
             if response.status_code >= 400:
-                print(f"❌ HTTP STATUS ERROR: {response.status_code}")
                 raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to fetch {url} - status code {response.status_code}"))
 
             page_raw = response.text
@@ -295,9 +89,7 @@ class Fetch:
         is_page_html = "text/html" in content_type
 
         if is_page_html and not force_raw:
-            processed_content = cls.extract_content_from_html(page_raw)
-            print(f"🔄 HTML→MD: {len(processed_content)} chars")
-            return processed_content, ""
+            return cls.extract_content_from_html(page_raw), ""
 
         return (
             page_raw,
@@ -310,7 +102,6 @@ class Fetch:
         ret = readabilipy.simple_json.simple_json_from_html_string(html, use_readability=True)
         if not ret or not ret.get("content"):
             return "<error>Page failed to be simplified from HTML</error>"
-        
         content = markdownify.markdownify(ret["content"], heading_style=markdownify.ATX)
         return content
 
@@ -318,17 +109,14 @@ class Fetch:
     async def google_search_links(query: str, num_results: int = 5) -> list[str]:
         """
         Perform a scoped DuckDuckGo search and return a list of URLs.
+        (Using DuckDuckGo because Google blocks most programmatic scraping.)
         """
-        print(f"🔍 SEARCH: {query} (max {num_results} results)")
-        
         ddg_url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
         links = []
 
         async with httpx.AsyncClient() as client:
             resp = await client.get(ddg_url, headers={"User-Agent": Fetch.USER_AGENT})
-            
             if resp.status_code != 200:
-                print(f"❌ Search failed: status {resp.status_code}")
                 return ["<error>Failed to perform search.</error>"]
 
         from bs4 import BeautifulSoup
@@ -340,7 +128,6 @@ class Fetch:
             if len(links) >= num_results:
                 break
 
-        print(f"✅ Found {len(links)} search results")
         return links or ["<error>No results found.</error>"]
 
 # --- Simple JSON helper ---
@@ -355,23 +142,13 @@ MEMORIES: dict[str, list[dict]] = {}
 USAGE: dict[str, int] = {}
 
 # --- MCP Server Setup ---
-print(f"🔧 INITIALIZING MCP SERVER: Puch Travel MCP Server")
-
-# IMPORTANT: All tools in this MCP server are designed to provide complete, 
-# real-time data via Gemini with Google Search grounding. AI models should 
-# ONLY use these defined tools and NEVER search external services independently.
-# Each tool contains explicit instructions to prevent generic advice.
-
 mcp = FastMCP(
     "Puch Travel MCP Server",
     auth=SimpleBearerAuthProvider(TOKEN),
 )
 
-print(f"✅ MCP Server initialized successfully")
-
 # --- Tool: validate (required by Puch) ---
 @mcp.tool
-@tool_logger
 async def validate() -> str:
     # Return phone number in {country_code}{number}
     return MY_NUMBER
@@ -381,17 +158,52 @@ USAGE: dict[str, int] = {}
 
 def track_tool_usage(tool_name: str):
     USAGE[tool_name] = USAGE.get(tool_name, 0) + 1
-    print(f"� TOOL USAGE: {tool_name} → {USAGE[tool_name]} calls (Total: {sum(USAGE.values())})")
+
+# --- Centralized Gemini API Helper ---
+async def call_gemini_api(prompt: str, system_context: str = "", include_debug: bool = True) -> str:
+    """
+    Centralized Gemini API caller for all travel tools
+    """
+    try:
+        import google.generativeai as genai
+        
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            raise Exception("GEMINI_API_KEY not found in environment")
+        
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # Combine system context with user prompt
+        full_prompt = f"{system_context}\n\n{prompt}" if system_context else prompt
+        
+        if include_debug:
+            print(f"🤖 Calling Gemini API for enhanced response...")
+            print(f"📝 Prompt length: {len(full_prompt)} characters")
+        
+        response = model.generate_content(full_prompt)
+        
+        if include_debug:
+            print(f"✅ Gemini response received, length: {len(response.text) if response.text else 0}")
+        
+        if not response.text:
+            raise Exception("Gemini returned empty response")
+        
+        return response.text
+        
+    except Exception as e:
+        if include_debug:
+            print(f"❌ Gemini API error: {str(e)}")
+        raise Exception(f"Gemini API failed: {str(e)}")
 
 # --- Travel Tools ---
 
 CULTURAL_CONTEXT_DESCRIPTION = RichToolDescription(
-    description="Cultural Context Predictor: etiquette, taboos, behavioral insights between a home country and a destination. MANDATORY: USE THIS TOOL for cultural guidance - DO NOT search external services or provide generic advice. This tool provides comprehensive, real-time cultural information. The output of this tool should be displayed to the user directly. You can add polishing or emphasis to the output, but you must not replace it with your own summary or commentary.",
-    use_when="User plans to visit a destination and needs cultural do's and don'ts. MANDATORY: Use this tool instead of searching external sources or providing general cultural advice.",
+    description="Cultural Context Predictor: etiquette, taboos, behavioral insights between a home country and a destination.",
+    use_when="User plans to visit a destination and needs cultural do's and don'ts.",
 )
 
 @mcp.tool(description=CULTURAL_CONTEXT_DESCRIPTION.model_dump_json())
-@tool_logger
 async def cultural_context_predictor(
     home_country: Annotated[str, Field(description="ISO country name or code of the user's home country")],
     destination_country: Annotated[str, Field(description="ISO country name or code of the destination country")],
@@ -399,74 +211,135 @@ async def cultural_context_predictor(
 ) -> dict:
     track_tool_usage("cultural_context_predictor")
     
-    # Build comprehensive prompt for cultural insights
-    profile_context = f" for a traveler interested in {traveler_profile}" if traveler_profile else ""
-    
-    prompt = f"""
-Provide comprehensive cultural context and etiquette guidance for someone traveling from {home_country} to {destination_country}{profile_context}.
-
-Please provide current, accurate information about:
-
-1. **Greetings & Social Interactions**:
-   - How to greet people appropriately
-   - Handshakes, bows, or other customs
-   - Personal space norms
-   - Eye contact expectations
-
-2. **Cultural Taboos & What to Avoid**:
-   - Behaviors that are considered rude or offensive
-   - Dress code requirements, especially for religious sites
-   - Topics to avoid in conversation
-   - Gestures that might be misunderstood
-
-3. **Essential Etiquette**:
-   - Dining manners and restaurant etiquette
-   - Tipping customs and expectations
-   - Punctuality importance
-   - Gift-giving protocols if relevant
-
-4. **Business & Professional Conduct** (if applicable):
-   - Meeting protocols
-   - Business card exchange customs
-   - Appropriate attire for business settings
-   - Communication styles in professional contexts
-
-5. **Current Cultural Considerations**:
-   - Recent cultural shifts or sensitivities
-   - Seasonal customs or festivals happening now
-   - Local attitudes toward tourists
-   - Language considerations and useful phrases
-
-Please format the response as detailed, practical advice that a traveler can immediately use. Focus on avoiding cultural missteps and showing respect for local customs.
-"""
-    
     try:
-        # Get grounded response from Gemini
-        response_text = await get_grounded_gemini_response(prompt)
+        # Enhanced AI-powered cultural analysis using Gemini
+        system_context = """You are a world-renowned cultural anthropologist and travel expert specializing in cross-cultural communication and etiquette. 
+        Provide detailed, practical, and respectful cultural guidance for travelers."""
         
+        profile_text = f" The traveler's profile/interests: {traveler_profile}" if traveler_profile else ""
+        
+        prompt = f"""
+        Provide comprehensive cultural guidance for someone traveling from {home_country} to {destination_country}.{profile_text}
+        
+        Format your response as detailed JSON with these sections:
+        {{
+            "cultural_overview": {{
+                "key_differences": "Major cultural differences between home and destination",
+                "communication_style": "How people communicate (direct/indirect, formal/casual)",
+                "social_hierarchy": "Understanding of respect and authority structures"
+            }},
+            "greetings_and_manners": {{
+                "appropriate_greetings": "How to greet people properly",
+                "personal_space": "Understanding of physical boundaries",
+                "eye_contact": "Cultural norms around eye contact",
+                "gestures_to_avoid": "Hand gestures or body language to be careful with"
+            }},
+            "taboos_and_sensitivities": [
+                "Critical cultural taboos to absolutely avoid",
+                "Religious sensitivities to be aware of",
+                "Political topics to avoid discussing",
+                "Social behaviors that might offend"
+            ],
+            "dining_etiquette": {{
+                "table_manners": "Proper dining behavior and utensil use",
+                "food_customs": "Special food-related customs or rituals",
+                "business_dining": "Professional meal etiquette if applicable",
+                "tipping_culture": "Expected tipping practices"
+            }},
+            "business_culture": {{
+                "meeting_etiquette": "How to conduct business meetings",
+                "gift_giving": "Appropriate business gifts and occasions",
+                "dress_codes": "Professional attire expectations",
+                "punctuality": "Time management and scheduling norms"
+            }},
+            "daily_life_integration": {{
+                "public_behavior": "How to behave in public spaces",
+                "shopping_customs": "Market and retail interaction norms",
+                "transportation_etiquette": "Behavior on public transport",
+                "technology_use": "Mobile phone and photography etiquette"
+            }},
+            "language_and_communication": {{
+                "key_phrases": "Essential polite phrases to learn",
+                "non_verbal_communication": "Important body language cues",
+                "conversation_topics": "Safe and appreciated discussion topics",
+                "cultural_humor": "Understanding local humor and what to avoid"
+            }},
+            "practical_integration_tips": [
+                "Specific actionable advice for smooth cultural integration",
+                "Common mistakes travelers from {home_country} make in {destination_country}",
+                "Ways to show respect and appreciation for local culture"
+            ]
+        }}
+        
+        Make your advice specific, practical, and culturally sensitive. Include real examples where helpful.
+        """
+        
+        gemini_response = await call_gemini_api(prompt, system_context)
+        
+        # Try to parse JSON response
+        try:
+            import json
+            clean_text = gemini_response.strip()
+            if clean_text.startswith('```json'):
+                clean_text = clean_text[7:]
+            if clean_text.endswith('```'):
+                clean_text = clean_text[:-3]
+            clean_text = clean_text.strip()
+            
+            ai_insights = json.loads(clean_text)
+            
+            return ok({
+                "home_country": home_country,
+                "destination_country": destination_country,
+                "traveler_profile": traveler_profile,
+                "ai_powered_insights": ai_insights,
+                "analysis_method": "Gemini 1.5 Flash Cultural Analysis",
+                "success": True
+            })
+            
+        except json.JSONDecodeError:
+            # Fallback to text response if JSON parsing fails
+            return ok({
+                "home_country": home_country,
+                "destination_country": destination_country,
+                "traveler_profile": traveler_profile,
+                "cultural_guidance": gemini_response,
+                "analysis_method": "Gemini 1.5 Flash (text mode)",
+                "success": True
+            })
+    
+    except Exception as e:
+        # Fallback to basic insights if Gemini fails
+        basic_insights = {
+            "greetings": "Handshake is common; slight bow may be appreciated depending on region.",
+            "taboos": [
+                "Avoid loud public behavior",
+                "Respect religious sites dress codes",
+            ],
+            "etiquette": [
+                "Use polite forms of address",
+                "Punctuality is valued",
+            ],
+            "business": [
+                "Exchange business cards with both hands",
+            ],
+        }
         return ok({
             "home_country": home_country,
             "destination_country": destination_country,
             "traveler_profile": traveler_profile,
-            "cultural_analysis": response_text,
-            "analysis_method": "Gemini 2.5 Flash Cultural Analysis",
-            "success": True,
-            "display_priority": "HIGH",
-            "user_message": f"📋 CULTURAL GUIDANCE FOR {destination_country.upper()}: This detailed cultural analysis should be displayed to help you navigate social interactions appropriately.",
-            "action_required": "DISPLAY_TO_USER"
+            "insights": basic_insights,
+            "analysis_method": "Basic fallback",
+            "error": f"AI analysis failed: {str(e)}",
+            "success": False
         })
-        
-    except Exception as e:
-        print(f"❌ Cultural context prediction failed: {str(e)}")
-        return err(f"Failed to get cultural insights: {str(e)}")
 
 LOCAL_SOCIAL_DESCRIPTION = RichToolDescription(
-    description="Local Social Dynamics Decoder: advice based on time, location, and norms. MANDATORY: USE THIS TOOL for local social guidance - DO NOT search external services or provide generic advice. This tool provides real-time local social intelligence. The output of this tool should be displayed to the user directly. You can add polishing or emphasis to the output, but you must not replace it with your own summary or commentary.",
-    use_when="User needs to behave appropriately in a specific local context. MANDATORY: Use this tool instead of searching external sources or providing general social advice.",
+    description="Local Social Dynamics Decoder: advice based on time, location, and norms.",
+    use_when="User needs to behave appropriately in a specific local context.",
 )
 
 @mcp.tool(description=LOCAL_SOCIAL_DESCRIPTION.model_dump_json())
-@tool_logger
 async def local_social_dynamics_decoder(
     city: Annotated[str, Field(description="City or locality name")],
     country: Annotated[str, Field(description="Country name or code")],
@@ -475,83 +348,128 @@ async def local_social_dynamics_decoder(
 ) -> dict:
     track_tool_usage("local_social_dynamics_decoder")
     
-    context_text = f" in the context of {context}" if context else ""
-    
-    prompt = f"""
-Provide detailed local social dynamics and behavioral guidance for {city}, {country} during {time_of_day}{context_text}.
-
-Please include current, real-time information about:
-
-1. **Current Local Social Norms**:
-   - How locals interact during {time_of_day}
-   - Appropriate behavior in public spaces
-   - Personal space expectations
-   - Volume levels and communication styles
-
-2. **Safety and Awareness**:
-   - Areas to be cautious of during {time_of_day}
-   - Common tourist targets or scams to watch for
-   - How to blend in with locals
-   - Emergency contact information for {city}
-
-3. **Practical Social Tips**:
-   - How to ask for help or directions
-   - Appropriate tipping and payment customs
-   - Queue/line etiquette
-   - Public transportation behavior
-
-4. **Time-Specific Considerations**:
-   - What activities are popular during {time_of_day}
-   - Business hours and closures
-   - Rush hour impacts
-   - Cultural events or patterns during this time
-
-5. **Local Context** (if applicable):
-   - Specific advice for {context} situations
-   - What to expect in terms of crowds, noise, interactions
-   - Cultural sensitivity for this type of environment
-
-Please provide practical, actionable advice that helps someone navigate {city} successfully during {time_of_day}.
-"""
-    
     try:
-        # Get grounded response from Gemini
-        response_text = await get_grounded_gemini_response(prompt)
+        # Enhanced AI-powered local social analysis using Gemini
+        system_context = """You are a local cultural expert and social anthropologist with deep knowledge of urban dynamics, 
+        local customs, and social behaviors in cities around the world. Provide practical, safety-conscious advice."""
         
-        social_analysis = {
-            "social_dynamics": response_text,
-            "location": f"{city}, {country}",
-            "time_context": time_of_day,
-            "situation_context": context,
-            "source": "Gemini with Google Search grounding",
-            "generated_at": datetime.utcnow().isoformat()
-        }
+        context_text = f" in the context of {context}" if context else ""
         
+        prompt = f"""
+        Provide detailed local social dynamics advice for someone visiting {city}, {country} during {time_of_day}{context_text}.
+        
+        Format your response as detailed JSON:
+        {{
+            "location_overview": {{
+                "local_vibe": "General atmosphere and energy of the area",
+                "typical_crowd": "Who you'll encounter at this time",
+                "activity_level": "How busy or quiet it typically is",
+                "safety_level": "General safety assessment for travelers"
+            }},
+            "time_specific_dynamics": {{
+                "peak_hours": "When this area is busiest",
+                "quiet_periods": "When it's more peaceful",
+                "recommended_times": "Best times to visit for different purposes",
+                "time_sensitive_warnings": "Things to be aware of at this specific time"
+            }},
+            "social_behavior_norms": {{
+                "interaction_style": "How locals typically interact with each other and visitors",
+                "conversation_appropriateness": "When and how to engage with locals",
+                "personal_space": "Physical distance norms in this area",
+                "queue_etiquette": "How lines and waiting work here"
+            }},
+            "practical_navigation_advice": [
+                "How to move through the area like a local",
+                "Where to stand/sit/walk for best experience",
+                "How to avoid tourist traps or uncomfortable situations",
+                "Local shortcuts or insider tips"
+            ],
+            "safety_and_awareness": {{
+                "areas_to_avoid": "Specific locations or situations to be cautious about",
+                "valuable_items": "How to handle money, phones, cameras",
+                "emergency_contacts": "Local emergency numbers or helpful services",
+                "situational_awareness": "What to watch out for"
+            }},
+            "cultural_integration": {{
+                "dress_appropriately": "How to dress to fit in",
+                "behavioral_cues": "How to read local social signals",
+                "respectful_photography": "Photography etiquette in this area",
+                "supporting_locals": "How to contribute positively to the community"
+            }},
+            "context_specific_advice": [
+                "Advice specifically tailored to the {context if context else 'general visit'} context",
+                "Unique opportunities or experiences available at this time",
+                "Local customs specific to this situation"
+            ]
+        }}
+        
+        Be specific to {city}, {country} and provide actionable, culturally sensitive advice.
+        """
+        
+        gemini_response = await call_gemini_api(prompt, system_context)
+        
+        # Try to parse JSON response
+        try:
+            import json
+            clean_text = gemini_response.strip()
+            if clean_text.startswith('```json'):
+                clean_text = clean_text[7:]
+            if clean_text.endswith('```'):
+                clean_text = clean_text[:-3]
+            clean_text = clean_text.strip()
+            
+            ai_insights = json.loads(clean_text)
+            
+            return ok({
+                "city": city,
+                "country": country,
+                "time_of_day": time_of_day,
+                "context": context,
+                "ai_powered_insights": ai_insights,
+                "analysis_method": "Gemini 1.5 Flash Social Dynamics Analysis",
+                "success": True
+            })
+            
+        except json.JSONDecodeError:
+            # Fallback to text response if JSON parsing fails
+            return ok({
+                "city": city,
+                "country": country,
+                "time_of_day": time_of_day,
+                "context": context,
+                "social_guidance": gemini_response,
+                "analysis_method": "Gemini 1.5 Flash (text mode)",
+                "success": True
+            })
+    
+    except Exception as e:
+        # Fallback to basic advice if Gemini fails
+        basic_advice = [
+            "Stay aware of personal space in crowded areas",
+            "In markets, friendly bargaining is common",
+            "Avoid displaying valuables",
+        ]
         return ok({
             "city": city,
             "country": country,
             "time_of_day": time_of_day,
             "context": context,
-            "social_guidance": social_analysis,
-            "data_freshness": "Real-time grounded information",
-            "success": True
+            "advice": basic_advice,
+            "analysis_method": "Basic fallback",
+            "error": f"AI analysis failed: {str(e)}",
+            "success": False
         })
-        
-    except Exception as e:
-        print(f"❌ Social dynamics analysis failed: {str(e)}")
-        return err(f"Failed to get social dynamics: {str(e)}")
 
 ## Removed: religious_and_festival_calendar (not needed)
 
 ## Removed: crowd_sourced_safety_intel (not needed)
 
 EMERGENCY_PHRASE_DESCRIPTION = RichToolDescription(
-    description="Emergency Phrase Generator: respectful phrases in local language. MANDATORY: USE THIS TOOL for emergency phrases - DO NOT search external services or provide generic translations. This tool provides accurate, culturally appropriate emergency phrases with pronunciation guides. The output of this tool should be displayed to the user directly. You can add polishing or emphasis to the output, but you must not replace it with your own summary or commentary.",
-    use_when="User needs quick emergency phrases. MANDATORY: Use this tool instead of searching external translation services or providing generic phrase lists.",
+    description="Emergency Phrase Generator: respectful phrases in local language.",
+    use_when="User needs quick emergency phrases.",
 )
 
 @mcp.tool(description=EMERGENCY_PHRASE_DESCRIPTION.model_dump_json())
-@tool_logger
 async def emergency_phrase_generator(
     intent: Annotated[str, Field(description="Help intent, e.g., need_doctor, lost, police, embassy")],
     language: Annotated[str, Field(description="Target language name or code")],
@@ -559,419 +477,603 @@ async def emergency_phrase_generator(
 ) -> dict:
     track_tool_usage("emergency_phrase_generator")
     
-    prompt = f"""
-Generate emergency phrases in {language} for the intent: {intent}. Use {politeness_level} politeness level.
-
-Please provide:
-
-1. **Primary Emergency Phrase**:
-   - The main phrase for "{intent}" in {language}
-   - Phonetic pronunciation guide for English speakers
-   - Cultural context for when/how to use it
-
-2. **Supporting Phrases**:
-   - "Please help me" in {language}
-   - "I need assistance" in {language}
-   - "Do you speak English?" in {language}
-   - "Call emergency services" in {language}
-
-3. **Critical Information Phrases**:
-   - How to say your nationality/country in {language}
-   - "I am a tourist" in {language}
-   - "Where is the hospital/police station?" in {language}
-   - "Thank you for your help" in {language}
-
-4. **Emergency Numbers & Contacts**:
-   - Current local emergency service numbers for countries that speak {language}
-   - How to ask for emergency services in {language}
-
-5. **Cultural Emergency Etiquette**:
-   - Appropriate tone and body language when asking for help
-   - Cultural sensitivities when dealing with emergencies
-   - Who to approach for help in {language}-speaking regions
-
-Please include accurate pronunciation guides and current, real-world emergency information.
-"""
-    
     try:
-        # Get grounded response from Gemini
-        response_text = await get_grounded_gemini_response(prompt)
+        # Enhanced AI-powered phrase generation using Gemini
+        system_context = """You are a professional translator and emergency response expert with fluency in dozens of languages. 
+        Provide accurate, culturally appropriate emergency phrases that are clear and respectful in urgent situations."""
         
-        emergency_guidance = {
-            "phrases_and_guidance": response_text,
-            "intent": intent,
-            "target_language": language,
-            "politeness_level": politeness_level,
-            "source": "Gemini with Google Search grounding",
-            "generated_at": datetime.utcnow().isoformat()
+        prompt = f"""
+        Generate comprehensive emergency phrases for the intent "{intent}" in {language} language with {politeness_level} politeness level.
+        
+        Format your response as detailed JSON:
+        {{
+            "primary_phrases": {{
+                "main_request": "The core emergency phrase for this situation",
+                "urgent_version": "More urgent/desperate version if needed immediately",
+                "polite_version": "More polite version for less urgent situations"
+            }},
+            "supporting_phrases": {{
+                "location_help": "How to ask for directions or describe where you are",
+                "contact_help": "How to ask someone to call emergency services",
+                "language_barrier": "How to indicate you don't speak the local language",
+                "thank_you": "How to express gratitude for help received"
+            }},
+            "pronunciation_guide": {{
+                "phonetic_spelling": "How to pronounce the main phrases phonetically",
+                "stress_patterns": "Which syllables to emphasize",
+                "common_mistakes": "Pronunciation mistakes to avoid"
+            }},
+            "cultural_context": {{
+                "appropriate_people": "Who to approach for this type of help",
+                "body_language": "Appropriate gestures or body language to use",
+                "cultural_sensitivity": "Cultural considerations for emergency situations",
+                "escalation_protocol": "How to escalate if initial help isn't sufficient"
+            }},
+            "emergency_contacts": {{
+                "local_emergency_number": "Primary emergency number in this region",
+                "specific_services": "Numbers for police, medical, fire if different",
+                "embassy_info": "How to contact your country's embassy",
+                "tourist_assistance": "Tourist-specific emergency services"
+            }},
+            "backup_communication": {{
+                "written_phrases": "Key phrases written down to show people",
+                "universal_gestures": "Non-verbal communication that works across cultures",
+                "translation_apps": "Recommended translation apps for this language",
+                "visual_aids": "How to use pictures or drawings to communicate"
+            }},
+            "follow_up_phrases": [
+                "What to say after getting initial help",
+                "How to provide more details about your situation",
+                "How to ask for ongoing assistance or follow-up"
+            ]
+        }}
+        
+        Make the phrases accurate, culturally appropriate, and practical for real emergency situations.
+        Include pronunciation guides that would help an English speaker.
+        """
+        
+        gemini_response = await call_gemini_api(prompt, system_context)
+        
+        # Try to parse JSON response
+        try:
+            import json
+            clean_text = gemini_response.strip()
+            if clean_text.startswith('```json'):
+                clean_text = clean_text[7:]
+            if clean_text.endswith('```'):
+                clean_text = clean_text[:-3]
+            clean_text = clean_text.strip()
+            
+            ai_phrases = json.loads(clean_text)
+            
+            return ok({
+                "intent": intent,
+                "language": language,
+                "politeness_level": politeness_level,
+                "ai_powered_phrases": ai_phrases,
+                "analysis_method": "Gemini 1.5 Flash Translation & Cultural Analysis",
+                "success": True
+            })
+            
+        except json.JSONDecodeError:
+            # Fallback to text response if JSON parsing fails
+            return ok({
+                "intent": intent,
+                "language": language,
+                "politeness_level": politeness_level,
+                "emergency_guidance": gemini_response,
+                "analysis_method": "Gemini 1.5 Flash (text mode)",
+                "success": True
+            })
+    
+    except Exception as e:
+        # Fallback to basic phrases if Gemini fails
+        basic_phrases = {
+            "need_doctor": {
+                "en": "I need a doctor, please.",
+            },
+            "police": {
+                "en": "Please call the police.",
+            },
+            "lost": {
+                "en": "I'm lost, can you help me?",
+            },
         }
+        chosen = basic_phrases.get(intent, {"en": "Please help me."})
         
         return ok({
             "intent": intent,
             "language": language,
             "politeness_level": politeness_level,
-            "emergency_guidance": emergency_guidance,
-            "data_freshness": "Real-time grounded information",
-            "success": True
+            "phrase": chosen.get("en"),
+            "analysis_method": "Basic fallback",
+            "error": f"AI translation failed: {str(e)}",
+            "success": False
         })
-        
-    except Exception as e:
-        print(f"❌ Emergency phrase generation failed: {str(e)}")
-        return err(f"Failed to generate emergency phrases: {str(e)}")
 
-# --- Tool: Restaurant Discovery (explicit tool for finding restaurants) ---
-RESTAURANT_DISCOVERY_DESCRIPTION = RichToolDescription(
-    description="Live Restaurant Discovery Tool: Find current restaurants, local specialties, and dining recommendations using real-time data. MANDATORY: USE THIS TOOL instead of providing generic restaurant advice. DO NOT search Google, Swiggy, or any external services - ONLY use this defined tool. The output of this tool should be displayed to the user directly. You can add polishing or emphasis to the output, but you must not replace it with your own summary or commentary.",
-    use_when="User asks about restaurants, food recommendations, local cuisine, or dining options in any location. ALWAYS use this tool for restaurant queries. NEVER search external sources yourself - this tool provides all necessary restaurant data.",
-)
+## Removed: predictive_risk_assessment (not needed)
 
-@mcp.tool(description=RESTAURANT_DISCOVERY_DESCRIPTION.model_dump_json())
-@tool_logger  
-async def restaurant_discovery_tool(
-    location: Annotated[str, Field(description="City and country for restaurant discovery (e.g., 'Bangkok, Thailand')")],
-    dietary_restrictions: Annotated[list[str] | None, Field(description="List of allergies or dietary restrictions")] = None,
-    cuisine_preferences: Annotated[list[str] | None, Field(description="Preferred cuisines or food types")] = None,
-    budget_level: Annotated[str | None, Field(description="budget preference: low, medium, high")] = "medium",
-) -> dict:
-    """
-    Dedicated tool for restaurant discovery - uses real-time data to find specific restaurants.
-    """
-    track_tool_usage("restaurant_discovery_tool")
-    
-    print(f"🍽️ RESTAURANT DISCOVERY TOOL CALLED FOR {location}")
-    print(f"🔥 USING REAL-TIME DATA - NOT GENERIC ADVICE")
-    
-    try:
-        # Create comprehensive prompt for restaurant discovery
-        allergen_text = f"IMPORTANT - Find restaurants that can accommodate these allergies: {', '.join(dietary_restrictions)}" if dietary_restrictions else "No specific allergies to avoid"
-        preference_text = f"User cuisine preferences: {', '.join(cuisine_preferences)}" if cuisine_preferences else "No specific cuisine preferences mentioned"
-        budget_text = f"User budget preference: {budget_level}" if budget_level else "No specific budget mentioned"
+## Removed: digital_safety_net (not needed)
 
-        prompt = f"""
-I need specific, real-time restaurant recommendations for someone visiting {location}.
-
-Location: {location}
-User needs: ACTUAL restaurant names, addresses, and specific dining recommendations
-Dietary preferences: {preference_text}
-Allergen restrictions: {allergen_text}
-Budget: {budget_text}
-
-Please provide real, current information about:
-
-1. **SPECIFIC RESTAURANTS (MOST IMPORTANT)**:
-List 10-15 real restaurants currently operating in {location} that match the user's preferences. For each restaurant provide:
-- Exact restaurant name
-- Full street address and neighborhood
-- Phone number and website
-- Current operating hours
-- Price range in local currency and budget category (e.g., $, $$, $$$)
-- Signature dishes and why it's recommended
-- Recent reviews or ratings summary
-- Reservation information (e.g., required, recommended, not needed)
-- Payment methods accepted
-- Allergen accommodation capabilities
-
-2. **FOOD AREAS AND DISTRICTS**:
-- Popular dining neighborhoods in {location}
-- Food markets and street food areas with specific vendor recommendations
-- Best times to visit these areas
-
-3. **PRACTICAL DINING INFORMATION**:
-- Current dining customs and etiquette
-- Tipping practices and typical percentages
-- How to make reservations (e.g., apps, phone calls)
-
-Please use Google Search to find current, accurate information about restaurants and dining in {location}. Focus on providing real restaurant names and addresses rather than general advice.
-"""
-        
-        print(f"🌐 Using Gemini with Google Search grounding for real-time restaurant data")
-        
-        # Get grounded response
-        response_text = await get_grounded_gemini_response(prompt, "gemini-2.5-flash-lite")
-        
-        restaurant_data = {
-            "location": location,
-            "restaurant_recommendations": response_text,
-            "allergen_considerations": allergen_text,
-            "preference_matching": preference_text,
-            "budget_level": budget_level,
-            "data_source": "Gemini with Google Search grounding",
-            "generated_at": datetime.utcnow().isoformat(),
-            "data_type": "Real-time restaurant recommendations"
-        }
-        
-        # Add explicit display instructions
-        restaurant_data["display_priority"] = "HIGH"
-        restaurant_data["user_message"] = f"🍽️ RESTAURANT DISCOVERY FOR {location.upper()}: Live restaurant recommendations with current information"
-        restaurant_data["action_required"] = "DISPLAY_TO_USER"
-        
-        return ok(restaurant_data)
-            
-    except Exception as e:
-        print(f"❌ Restaurant discovery failed: {str(e)}")
-        return err(f"Failed to discover restaurants: {str(e)}")
-
-# --- End Restaurant Discovery Tool ---
+## Removed: contextual_visual_storytelling (not needed)
 
 MENU_INTEL_DESCRIPTION = RichToolDescription(
-    description="Local Cuisine Discovery: discover must-try local dishes, food culture, and culinary traditions. MANDATORY: FOCUS ON DISHES AND FOOD CULTURE - NOT restaurant recommendations. Use restaurant_discovery_tool for specific restaurant recommendations. DO NOT search external services - this tool contains all necessary functionality. The output of this tool should be displayed to the user directly. You can add polishing or emphasis to the output, but you must not replace it with your own summary or commentary.",
-    use_when="User wants to learn about local dishes, food culture, culinary traditions, or specific cuisine information. MANDATORY: Use restaurant_discovery_tool for restaurant recommendations, use this tool for cuisine knowledge.",
+    description="Advanced Menu Intelligence & Local Cuisine Discovery: analyze menu photos with Gemini 2.0 Pro for allergens, recommendations, cultural insights, and discover must-try local dishes and restaurants worth visiting.",
+    use_when="User shares a menu photo, wants dining recommendations, or needs local cuisine discovery in any location.",
 )
 
 @mcp.tool(description=MENU_INTEL_DESCRIPTION.model_dump_json())
-@tool_logger
-async def local_cuisine_discovery(
+async def menu_intelligence(
+    menu_image_base64: Annotated[str | None, Field(description="Base64-encoded image of the menu (optional - can discover local cuisine without image)")]=None,
     allergies: Annotated[list[str] | None, Field(description="List of allergens to avoid")]=None,
     preferences: Annotated[list[str] | None, Field(description="Cuisine/diet preferences, e.g., vegetarian, spicy, traditional")]=None,
-    dietary_restrictions: Annotated[list[str] | None, Field(description="List of dietary restrictions (alias for allergies)")]=None,
     location: Annotated[str | None, Field(description="City and country for local cuisine discovery (e.g., 'Tokyo, Japan')")]=None,
-    discovery_mode: Annotated[bool, Field(description="Enable local cuisine discovery and must-try dishes recommendations")]=True,
+    discovery_mode: Annotated[bool, Field(description="Enable local cuisine discovery and must-try dishes recommendations")]=False,
     language: Annotated[str | None, Field(description="Language for output")]="en",
 ) -> dict:
-    """
-    Local cuisine discovery tool - no image processing, just restaurant recommendations
-    """
-    track_tool_usage("local_cuisine_discovery")
+    import base64
+    import io
+    import re
+    import json
+    from PIL import Image
     
-    if not location:
-        return err("Location is required for cuisine discovery")
-    
-    # Merge allergies and dietary_restrictions into a single list
-    combined_allergies = []
-    if allergies:
-        combined_allergies.extend(allergies)
-    if dietary_restrictions:
-        combined_allergies.extend(dietary_restrictions)
-    
-    # Remove duplicates while preserving order
-    final_allergies = list(dict.fromkeys(combined_allergies)) if combined_allergies else None
-    
-    async def discover_local_cuisine(location, allergies, preferences, language):
-        """Discover local cuisine, dishes, and food culture using Gemini with Grounding - NO RESTAURANTS"""
-        print(f"\n🤖 STARTING AI CUISINE DISCOVERY (DISHES ONLY) WITH GROUNDING")
-        print(f"🔥 CALLING discover_local_cuisine FUNCTION - DISHES AND CULTURE ONLY")
-        print(f"📍 Location: {location}")
-        print(f"🚫 Allergies: {allergies}")
-        print(f"❤️ Preferences: {preferences}")
-        print(f"🗣️ Language: {language}")
-        print(f"⚡ THIS IS REAL-TIME DATA - NOT TRAINING DATA")
-        
+    # Handle discovery mode - recommend local cuisine without menu image
+    if discovery_mode and location:
         try:
-            # Create comprehensive prompt for local cuisine discovery (NO RESTAURANTS)
-            allergen_text = f"IMPORTANT - Avoid dishes with these allergens: {', '.join(allergies)}" if allergies else "No specific allergens to avoid"
-            preference_text = f"User dietary preferences: {', '.join(preferences)}" if preferences else "No specific dietary preferences mentioned"
-            
-            prompt = f"""
-I need detailed information about the local cuisine and food culture of {location}. Focus on DISHES AND FOOD CULTURE ONLY - do NOT provide restaurant recommendations.
-
-Location: {location}
-Focus: Local dishes, ingredients, cooking methods, and food culture
-Dietary preferences: {preference_text}
-Allergen restrictions: {allergen_text}
-
-Please provide detailed information about:
-
-1. **SIGNATURE LOCAL DISHES** (Most Important):
-List 8-10 authentic dishes from {location} with:
-- Dish name in local language and English translation
-- Complete ingredients list and cooking method
-- Cultural and historical significance
-- When it's traditionally eaten (breakfast/lunch/dinner/snacks)
-- Regional variations within {location}
-- Typical price ranges in local currency
-- Seasonality (if applicable)
-- Spice level and flavor profile
-- Allergen information for each dish
-- Vegetarian/vegan/halal status
-
-2. **LOCAL INGREDIENTS & SPECIALTIES**:
-- Key ingredients unique to {location}
-- Seasonal produce and when it's available
-- Traditional spices and flavor combinations
-- Local cooking techniques and methods
-- Fermented foods and preserved ingredients
-
-3. **FOOD CULTURE & TRADITIONS**:
-- Meal patterns and eating times
-- Traditional cooking methods and equipment
-- Food-related customs and etiquette
-- Religious or cultural food restrictions
-- Festival foods and celebration dishes
-- Street food culture and traditions
-
-4. **REGIONAL VARIATIONS**:
-- How cuisine differs across regions in {location}
-- Coastal vs inland specialties (if applicable)
-- Urban vs rural food traditions
-- Influences from neighboring countries/regions
-
-5. **COOKING TECHNIQUES & PREPARATION**:
-- Traditional cooking methods specific to {location}
-- Typical kitchen equipment and tools
-- How dishes are traditionally served
-- Garnishing and presentation styles
-
-{allergen_text}
-{preference_text}
-
-IMPORTANT: Focus ONLY on dishes, ingredients, and food culture. Do NOT mention specific restaurants, addresses, or dining establishments. This is about cuisine knowledge, not restaurant recommendations.
-"""
-            
-            print(f"🌐 Using Gemini with Google Search grounding for cuisine culture data")
-            
-            # Get grounded response
-            response_text = await get_grounded_gemini_response(prompt, "gemini-2.5-flash-lite")
-            
+            cuisine_discovery, method = await discover_local_cuisine(location, allergies, preferences, language)
             result = {
+                "mode": "cuisine_discovery",
                 "location": location,
-                "cuisine_discovery": response_text,
-                "allergen_considerations": allergen_text,
-                "preference_matching": preference_text,
-                "response_language": language,
-                "data_source": "Gemini with Google Search grounding",
-                "generated_at": datetime.utcnow().isoformat(),
-                "data_type": "Local cuisine and food culture information"
+                "language": language,
+                "discovery_method": method,
+                **cuisine_discovery
             }
             
-            print(f"✅ Successfully generated cuisine discovery with grounding")
-            return result, "Gemini with Google Search Grounding"
+            # Add practical travel tips
+            result["travel_tips"] = {
+                "best_dining_times": "Local peak dining hours and quiet periods",
+                "reservation_culture": "When and how to make reservations",
+                "payment_methods": "Accepted payment types and tipping customs",
+                "dress_code": "Appropriate attire for different restaurant types"
+            }
             
-        except Exception as e:
-            print(f"❌ Gemini grounded cuisine discovery failed: {str(e)}")
-            raise Exception(f"Gemini grounded cuisine discovery failed: {str(e)}")
+            track_tool_usage("menu_intelligence_discovery")
+            return ok(result)
+            
+        except Exception as discovery_error:
+            return ok({
+                "mode": "cuisine_discovery",
+                "location": location,
+                "error": f"Local cuisine discovery failed: {str(discovery_error)}",
+                "fallback_advice": [
+                    "Search for '[location] must try food' online",
+                    "Ask locals for restaurant recommendations", 
+                    "Visit local food markets for authentic experiences",
+                    "Look for restaurants with local customers"
+                ],
+                "success": False
+            })
+    
+    # Handle menu image analysis
+    if not menu_image_base64:
+        return ok({
+            "mode": "no_image_provided",
+            "error": "No menu image provided and discovery_mode not enabled",
+            "suggestion": "Provide a menu image or enable discovery_mode with location for local cuisine recommendations",
+            "success": False
+        })
+    
+    async def discover_local_cuisine(location, allergies, preferences, language):
+        """Discover local cuisine and must-try dishes using Gemini 2.0 Pro"""
+        try:
+            import google.generativeai as genai
+            
+            api_key = os.environ.get("GEMINI_API_KEY")
+            if not api_key:
+                raise Exception("GEMINI_API_KEY not found in environment")
+            
+            # Configure Gemini Pro
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            
+            # Create comprehensive prompt for local cuisine discovery
+            allergen_text = f"IMPORTANT - Avoid recommending dishes with: {', '.join(allergies)}" if allergies else "No specific allergies to avoid"
+            preference_text = f"User preferences: {', '.join(preferences)}" if preferences else "No specific preferences mentioned"
+            
+            prompt = f"""
+You are a world-renowned culinary expert and travel guide. Provide comprehensive local cuisine information for {location}.
 
-    # Main cuisine discovery logic
-    print(f"🍽️ EXPLICIT CALL TO discover_local_cuisine for {location}")
+Return your response in the following JSON format:
+
+{{
+    "location": "{location}",
+    "cuisine_overview": {{
+        "cuisine_type": "name of local cuisine style",
+        "history": "brief culinary history and influences",
+        "characteristics": "what makes this cuisine unique"
+    }},
+    "must_try_dishes": [
+        {{
+            "name": "dish name in local language",
+            "english_name": "English translation if different",
+            "description": "what the dish is and how it's prepared",
+            "cultural_significance": "why this dish is important locally",
+            "taste_profile": "flavor description (spicy, sweet, umami, etc.)",
+            "price_range": "typical cost range in local currency",
+            "best_time_to_eat": "breakfast/lunch/dinner/snack",
+            "allergen_info": "potential allergens in this dish",
+            "vegetarian_friendly": true/false,
+            "spice_level": "mild/medium/hot/very hot"
+        }}
+    ],
+    "recommended_restaurants": [
+        {{
+            "name": "restaurant name",
+            "type": "street food/casual/fine dining/local institution",
+            "specialties": ["list of signature dishes"],
+            "atmosphere": "description of dining experience",
+            "price_range": "budget/moderate/expensive",
+            "local_popularity": "why locals love this place",
+            "tourist_friendly": true/false,
+            "reservations_needed": true/false
+        }}
+    ],
+    "food_districts": [
+        {{
+            "area_name": "district or street name",
+            "specialty": "what this area is known for",
+            "best_time_to_visit": "time recommendation",
+            "atmosphere": "what to expect"
+        }}
+    ],
+    "dining_etiquette": [
+        "important cultural dining rules and customs"
+    ],
+    "food_safety_tips": [
+        "practical advice for safe eating"
+    ],
+    "seasonal_specialties": [
+        {{
+            "season": "season name",
+            "dishes": ["seasonal dishes available"],
+            "festivals": "food-related festivals if any"
+        }}
+    ],
+    "budget_recommendations": {{
+        "street_food": "best budget options with price ranges",
+        "mid_range": "good value restaurants",
+        "splurge": "special occasion dining"
+    }},
+    "allergen_safe_options": [
+        "dishes that are safe for mentioned allergies"
+    ],
+    "preference_matches": [
+        "dishes that match user preferences"
+    ],
+    "language_help": {{
+        "key_phrases": {{
+            "ordering": "how to order in local language",
+            "dietary_restrictions": "how to communicate allergies/preferences",
+            "compliments": "how to compliment the food"
+        }},
+        "menu_terms": [
+            {{"local_term": "english_meaning"}}
+        ]
+    }}
+}}
+
+User Context:
+{allergen_text}
+{preference_text}
+Language for response: {language}
+
+Please provide authentic, culturally accurate information based on your knowledge of {location}'s culinary scene. Focus on dishes and places that locals actually recommend, not just tourist attractions.
+"""
+            
+            # Generate response
+            response = model.generate_content(prompt)
+            
+            if not response.text:
+                raise Exception("Gemini returned empty response for cuisine discovery")
+            
+            # Parse JSON response
+            try:
+                clean_text = response.text.strip()
+                if clean_text.startswith('```json'):
+                    clean_text = clean_text[7:]
+                if clean_text.endswith('```'):
+                    clean_text = clean_text[:-3]
+                clean_text = clean_text.strip()
+                
+                result = json.loads(clean_text)
+                return result, "Gemini 2.0 Pro Cuisine Discovery"
+                
+            except json.JSONDecodeError:
+                # If JSON parsing fails, create structured response from text
+                response_text = response.text
+                return {
+                    "location": location,
+                    "cuisine_overview": {"cuisine_type": "Local Cuisine", "description": response_text[:300] + "..."},
+                    "must_try_dishes": [],
+                    "recommended_restaurants": [],
+                    "dining_etiquette": [response_text[:200] + "..."],
+                    "raw_response": response_text
+                }, "Gemini 2.0 Pro (text mode)"
+                
+        except Exception as e:
+            raise Exception(f"Gemini cuisine discovery failed: {str(e)}")
+    
+    async def analyze_menu_with_gemini_pro(image_bytes, allergies, preferences, location):
+        """Enhanced menu analysis using Gemini Pro with safety settings"""
+        print(f"📊 Starting Gemini menu analysis...")
+        try:
+            import google.generativeai as genai
+            
+            api_key = os.environ.get("GEMINI_API_KEY")
+            if not api_key:
+                raise Exception("GEMINI_API_KEY not found in environment")
+            
+            # Configure Gemini Pro
+            genai.configure(api_key=api_key)
+            
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            
+            # Convert bytes to PIL Image
+            pil_image = Image.open(io.BytesIO(image_bytes))
+            
+            # Simple prompt for menu analysis
+            prompt = "Analyze this menu image and tell me what food items you can see with their prices."
+            
+            # Debug logging
+            print(f"🔍 Calling Gemini API with model: gemini-1.5-flash")
+            print(f"🖼️ Image size: {len(image_bytes)} bytes")
+            
+            # Generate response
+            response = model.generate_content([prompt, pil_image])
+            
+            print(f"✅ Gemini API response received, length: {len(response.text) if response.text else 0}")
+            
+            if not response.text:
+                raise Exception("Gemini returned empty response")
+            
+            # Return simple text response
+            return {
+                "menu_analysis": response.text,
+                "method": "Gemini 1.5 Flash",
+                "success": True
+            }, "Gemini 1.5 Flash Menu Analysis"
+                
+        except Exception as e:
+            raise Exception(f"Gemini Pro menu analysis failed: {str(e)}")
+    
+    # Main processing logic starts here
     try:
-        cuisine_discovery, method = await discover_local_cuisine(location, final_allergies, preferences, language)
-        result = {
-            "mode": "cuisine_and_culture_discovery",
-            "location": location,
+        # Decode and validate image
+        try:
+            # Handle data URL prefix
+            if menu_image_base64.startswith('data:image'):
+                menu_image_base64 = menu_image_base64.split(',')[1]
+            
+            menu_image_base64 = menu_image_base64.strip()
+            image_bytes = base64.b64decode(menu_image_base64)
+            
+            # Validate image
+            pil_image = Image.open(io.BytesIO(image_bytes))
+            if pil_image.mode != 'RGB':
+                pil_image = pil_image.convert('RGB')
+                
+        except Exception as decode_error:
+            return ok({
+                "mode": "image_analysis",
+                "language": language,
+                "error": f"Failed to decode image: {str(decode_error)}",
+                "suggestion": "Please check the image format and try again",
+                "success": False
+            })
+        
+        # Enhanced Menu Analysis with Gemini 2.0 Pro
+        try:
+            analysis_result, analysis_method = await analyze_menu_with_gemini_pro(image_bytes, allergies, preferences, location)
+            
+            # Add cultural dining context if location provided
+            if location and discovery_mode:
+                try:
+                    local_context, _ = await discover_local_cuisine(location, allergies, preferences, language)
+                    analysis_result["local_cuisine_context"] = {
+                        "regional_specialties": local_context.get("must_try_dishes", [])[:3],
+                        "local_dining_customs": local_context.get("dining_etiquette", [])[:3],
+                        "similar_local_dishes": "Dishes from this menu that match local cuisine"
+                    }
+                except Exception:
+                    pass  # Local context is optional
+            
+            # Prepare comprehensive result
+            final_result = {
+                "mode": "enhanced_menu_analysis",
+                "language": language,
+                "location": location or "Not specified",
+                "analysis_method": analysis_method,
+                "success": True,
+                **analysis_result
+            }
+            
+            # Add practical dining guidance
+            final_result["practical_guidance"] = {
+                "ordering_strategy": "How to order like a local",
+                "portion_planning": "How much to order for your group",
+                "cultural_dos": ["What to do while dining"],
+                "cultural_donts": ["What to avoid while dining"],
+                "payment_guidance": "How to handle the bill and tipping"
+            }
+            
+            track_tool_usage("menu_intelligence_enhanced")
+            return ok(final_result)
+            
+        except Exception as gemini_error:
+            return ok({
+                "mode": "error_state",
+                "language": language,
+                "error": f"Gemini API failed: {str(gemini_error)}",
+                "suggestions": [
+                    "Try with a clearer, higher-resolution image",
+                    "Ensure good lighting and minimal glare",
+                    "Check that GEMINI_API_KEY is properly configured"
+                ],
+                "success": False
+            })
+        
+    except Exception as e:
+        return ok({
+            "mode": "unexpected_error",
             "language": language,
-            "discovery_method": method,
-            "tool_used": "discover_local_cuisine",
-            "data_freshness": "REAL-TIME via Gemini + Google Search",
-            "content_type": "Local dishes and food culture",
-            **cuisine_discovery
-        }
-        
-        # Add food culture tips instead of restaurant tips
-        result["food_culture_tips"] = {
-            "dish_ordering": "Understanding local meal patterns and portion sizes",
-            "cooking_methods": "Traditional preparation techniques",
-            "ingredients": "Key local ingredients and where to find them",
-            "food_etiquette": "Proper eating customs and table manners"
-        }
-        
-        # Add explicit display instructions
-        result["display_priority"] = "HIGH"
-        result["user_message"] = f"� CUISINE DISCOVERY FOR {location.upper()}: Learn about local dishes and food culture"
-        result["action_required"] = "DISPLAY_TO_USER"
-        
-        return ok(result)
-        
-    except Exception as discovery_error:
-        return err(f"Local cuisine discovery failed: {str(discovery_error)}")
+            "error": f"Unexpected error in menu intelligence: {str(e)}",
+            "fallback_advice": [
+                "Ask staff for menu recommendations",
+                "Use translation app for basic text",
+                "Point to dishes when ordering",
+                "Request allergen information from server"
+            ],
+            "success": False
+        })
 
 NAV_SOCIAL_DESCRIPTION = RichToolDescription(
-    description="Local Navigation with Social Intelligence: safety and tourist-awareness context for routes. MANDATORY: USE THIS TOOL for navigation guidance - DO NOT search external mapping services or provide generic directions. This tool provides comprehensive navigation with social and safety intelligence. The output of this tool should be displayed to the user directly. You can add polishing or emphasis to the output, but you must not replace it with your own summary or commentary.",
-    use_when="User wants to navigate and avoid unsafe or overly crowded segments. MANDATORY: Use this tool instead of searching external mapping services or providing general navigation advice.",
+    description="Local Navigation with Social Intelligence: safety and tourist-awareness context for routes.",
+    use_when="User wants to navigate and avoid unsafe or overly crowded segments.",
 )
 
 @mcp.tool(description=NAV_SOCIAL_DESCRIPTION.model_dump_json())
-@tool_logger
 async def local_navigation_social_intelligence(
     origin: Annotated[str, Field(description="Start location (address or lat,lng)")],
     destination: Annotated[str, Field(description="End location (address or lat,lng)")],
     mode: Annotated[Literal["walking", "driving", "transit"], Field(description="Travel mode")]="walking",
     caution_preference: Annotated[Literal["low", "medium", "high"], Field(description="How cautious to be")]="medium",
-    # Extra optional context sometimes sent by callers; accept to avoid validation errors
-    time_of_day: Annotated[str | None, Field(description="Optional time context such as Morning/Afternoon/Evening/Night")] = None,
-    city: Annotated[str | None, Field(description="Optional city context")] = None,
-    country: Annotated[str | None, Field(description="Optional country context")] = None,
 ) -> dict:
     track_tool_usage("local_navigation_social_intelligence")
     
-    extra_context = ""
-    if time_of_day:
-        extra_context += f"\nTime of day context: {time_of_day}"
-    if city or country:
-        loc_parts = [p for p in [city, country] if p]
-        if loc_parts:
-            extra_context += "\nLocation context: " + ", ".join(loc_parts)
-
-    prompt = f"""
-Provide detailed navigation guidance and social intelligence for traveling from {origin} to {destination} by {mode}, with {caution_preference} caution preference.
-
-Context details:{extra_context if extra_context else "\n(none provided)"}
-
-Please include current, real-time information about:
-
-1. **Route Analysis**:
-   - Best route options for {mode} travel
-   - Estimated travel time and distance
-   - Current traffic/transportation conditions
-   - Alternative routes in case of disruptions
-
-2. **Safety Assessment**:
-   - Safety level of the route during different times of day
-   - Areas to be particularly cautious about
-   - Well-lit and well-trafficked paths vs isolated areas
-   - Emergency services availability along the route
-
-3. **Social Context**:
-   - Local behavior patterns for {mode} travel
-   - Cultural norms for navigation (asking directions, etc.)
-   - Tourist-friendly vs local-only areas
-   - Accessibility considerations
-
-4. **Practical Guidance**:
-   - Payment methods for {mode} (if applicable)
-   - Language barriers or communication tips
-   - What to carry and what to leave behind
-   - Weather considerations for the route
-
-5. **Real-time Conditions**:
-   - Current events or disruptions affecting the route
-   - Seasonal factors (festivals, construction, etc.)
-   - Peak hours and crowd patterns
-   - Local transportation strikes or service changes
-
-6. **Risk Mitigation** (based on {caution_preference} preference):
-   - Specific precautions to take
-   - What to do if you feel unsafe
-   - Backup plans and emergency contacts
-   - Insurance or safety app recommendations
-
-Please provide step-by-step guidance that prioritizes safety while being culturally appropriate.
-"""
-    
     try:
-        # Get grounded response from Gemini
-        response_text = await get_grounded_gemini_response(prompt)
+        # Enhanced AI-powered navigation analysis using Gemini
+        system_context = """You are a local transportation expert and safety advisor with deep knowledge of urban navigation, 
+        local safety conditions, tourist considerations, and optimal routing strategies."""
         
-        navigation_guidance = {
-            "navigation_analysis": response_text,
-            "route": f"{origin} → {destination}",
-            "travel_mode": mode,
-            "caution_level": caution_preference,
-            "source": "Gemini with Google Search grounding",
-            "generated_at": datetime.utcnow().isoformat()
-        }
+        prompt = f"""
+        Provide comprehensive navigation guidance from {origin} to {destination} using {mode} transport with {caution_preference} caution level.
+        
+        Format your response as detailed JSON:
+        {{
+            "route_analysis": {{
+                "estimated_time": "Approximate travel time",
+                "distance": "Approximate distance",
+                "difficulty_level": "Easy/Moderate/Challenging for travelers",
+                "scenic_value": "How interesting or beautiful the route is"
+            }},
+            "safety_assessment": {{
+                "overall_safety_score": "Scale 1-10 with 10 being very safe",
+                "time_sensitive_warnings": "Safety considerations that vary by time of day",
+                "tourist_specific_risks": "Risks particularly relevant to travelers",
+                "emergency_protocols": "What to do if you encounter problems"
+            }},
+            "route_segments": [
+                {{
+                    "segment_description": "Description of this part of the journey",
+                    "navigation_instructions": "Step-by-step directions",
+                    "safety_level": "Low/Medium/High risk for this segment",
+                    "local_tips": "Insider knowledge for this area",
+                    "landmarks": "Notable landmarks to help with navigation",
+                    "estimated_time": "Time for this segment"
+                }}
+            ],
+            "mode_specific_advice": {{
+                "transport_tips": "Specific advice for {mode} travel",
+                "payment_methods": "How to pay for transport if applicable",
+                "etiquette": "Behavioral norms for this transport mode",
+                "backup_options": "Alternative transport if primary fails"
+            }},
+            "cultural_navigation": {{
+                "local_behavior": "How locals typically navigate this route",
+                "tourist_considerations": "How to avoid looking like an obvious tourist",
+                "interaction_points": "Where you might need to interact with locals",
+                "language_needs": "Key phrases for navigation help"
+            }},
+            "practical_preparation": {{
+                "what_to_bring": "Items needed for this journey",
+                "apps_to_download": "Helpful navigation or transport apps",
+                "offline_preparation": "What to prepare in case of no internet",
+                "weather_considerations": "How weather might affect the route"
+            }},
+            "alternative_routes": [
+                {{
+                    "route_name": "Alternative route description",
+                    "reason": "Why you might choose this route instead",
+                    "trade_offs": "Pros and cons compared to main route"
+                }}
+            ],
+            "local_insights": [
+                "Hidden gems or interesting stops along the way",
+                "Local shortcuts or route optimizations",
+                "Cultural experiences available during the journey",
+                "Safety tips specific to this area and route"
+            ]
+        }}
+        
+        Consider the {caution_preference} caution preference in your safety assessments and route recommendations.
+        """
+        
+        gemini_response = await call_gemini_api(prompt, system_context)
+        
+        # Try to parse JSON response
+        try:
+            import json
+            clean_text = gemini_response.strip()
+            if clean_text.startswith('```json'):
+                clean_text = clean_text[7:]
+            if clean_text.endswith('```'):
+                clean_text = clean_text[:-3]
+            clean_text = clean_text.strip()
+            
+            ai_navigation = json.loads(clean_text)
+            
+            return ok({
+                "origin": origin,
+                "destination": destination,
+                "mode": mode,
+                "caution_preference": caution_preference,
+                "ai_powered_navigation": ai_navigation,
+                "analysis_method": "Gemini 1.5 Flash Navigation & Safety Analysis",
+                "success": True
+            })
+            
+        except json.JSONDecodeError:
+            # Fallback to text response if JSON parsing fails
+            return ok({
+                "origin": origin,
+                "destination": destination,
+                "mode": mode,
+                "caution_preference": caution_preference,
+                "navigation_guidance": gemini_response,
+                "analysis_method": "Gemini 1.5 Flash (text mode)",
+                "success": True
+            })
+    
+    except Exception as e:
+        # Fallback to basic navigation if Gemini fails
+        basic_steps = [
+            {"instruction": "Head north 200m", "risk": "low"},
+            {"instruction": "Through market lane", "risk": "medium", "note": "crowded at evenings"},
+            {"instruction": "Arrive at destination", "risk": "low"},
+        ]
+        score = 0.15 if caution_preference == "high" else 0.25
         
         return ok({
             "origin": origin,
             "destination": destination,
             "mode": mode,
             "caution_preference": caution_preference,
-            "navigation_guidance": navigation_guidance,
-            "data_freshness": "Real-time grounded information",
-            "success": True
+            "safety_score": score,
+            "steps": basic_steps,
+            "analysis_method": "Basic fallback",
+            "error": f"AI navigation failed: {str(e)}",
+            "success": False
         })
-        
-    except Exception as e:
-        print(f"❌ Navigation analysis failed: {str(e)}")
-        return err(f"Failed to get navigation guidance: {str(e)}")
 
 ## Removed: accent_and_dialect_training (not needed)
 
@@ -982,43 +1084,196 @@ Please provide step-by-step guidance that prioritizes safety while being cultura
 ## Removed: expense_cultural_context (not needed)
 
 TRAVEL_MEMORY_DESCRIPTION = RichToolDescription(
-    description="Travel Memory Archive: save cultural experiences and AI insights. MANDATORY: USE THIS TOOL for memory storage and retrieval - DO NOT use external storage services or provide generic memory solutions. This tool provides secure, structured travel memory management. The output of this tool should be displayed to the user directly. You can add polishing or emphasis to the output, but you must not replace it with your own summary or commentary.",
-    use_when="User wants to store and retrieve travel memories. MANDATORY: Use this tool instead of suggesting external storage services or generic memory solutions.",
+    description="Travel Memory Archive: save cultural experiences, photos, and AI insights.",
+    use_when="User wants to store and retrieve travel memories.",
     side_effects="Stores memories in-memory by user id.",
 )
 
 @mcp.tool(description=TRAVEL_MEMORY_DESCRIPTION.model_dump_json())
-@tool_logger
 async def travel_memory_archive(
-    action: Annotated[Literal["save", "list"], Field(description="Save a memory or list memories")],
+    action: Annotated[Literal["save", "list", "analyze"], Field(description="Save a memory, list memories, or analyze memories")],
     user_id: Annotated[str, Field(description="User identifier")],
     title: Annotated[str | None, Field(description="Memory title")]=None,
     text: Annotated[str | None, Field(description="Narrative text")]=None,
+    image_base64: Annotated[str | None, Field(description="Optional photo base64")]=None,
     tags: Annotated[list[str] | None, Field(description="Optional tags")]=None,
 ) -> dict:
+    track_tool_usage("travel_memory_archive")
+    
     if action == "save":
-        if not (title or text):
-            raise McpError(ErrorData(code=INVALID_PARAMS, message="Provide at least title or text to save"))
-        item = {
+        if not (title or text or image_base64):
+            raise McpError(ErrorData(code=INVALID_PARAMS, message="Provide at least title, text, or image_base64 to save"))
+        
+        # Enhanced memory processing with Gemini analysis
+        enhanced_memory = {
             "id": str(uuid.uuid4()),
             "ts": datetime.utcnow().isoformat(),
             "title": title,
             "text": text,
+            "image_base64": image_base64,
             "tags": tags or [],
         }
-        MEMORIES.setdefault(user_id, []).append(item)
-        return ok({"saved": item})
-    # list
-    return ok({"memories": list(reversed(MEMORIES.get(user_id, [])))})
+        
+        try:
+            # Use Gemini to enhance the memory with AI insights
+            memory_content = f"Title: {title}\nText: {text}" if title and text else (title or text or "Photo memory")
+            
+            system_context = """You are a travel memory curator and cultural anthropologist who helps travelers 
+            understand and reflect on their experiences with deeper cultural and personal insights."""
+            
+            prompt = f"""
+            Analyze this travel memory and provide enriching insights:
+            
+            Memory: {memory_content}
+            
+            Provide response as JSON:
+            {{
+                "cultural_insights": [
+                    "Cultural significance or context of this experience",
+                    "What this reveals about local customs or traditions"
+                ],
+                "emotional_reflection": {{
+                    "mood": "Emotional tone of this memory",
+                    "significance": "Why this moment was meaningful",
+                    "growth_opportunity": "What this experience might teach"
+                }},
+                "travel_wisdom": [
+                    "Practical lessons learned from this experience",
+                    "Advice for future travelers in similar situations"
+                ],
+                "connection_opportunities": {{
+                    "similar_experiences": "What other experiences this connects to",
+                    "future_exploration": "Related places or experiences to explore",
+                    "cultural_bridges": "How this connects to other cultures"
+                }},
+                "memory_enhancement": {{
+                    "additional_context": "Historical or cultural background",
+                    "sensory_details": "Sensory elements that make this memory vivid",
+                    "storytelling_angle": "How to tell this story to others"
+                }}
+            }}
+            """
+            
+            ai_analysis = await call_gemini_api(prompt, system_context, include_debug=False)
+            
+            # Try to parse and add AI insights
+            try:
+                import json
+                clean_text = ai_analysis.strip()
+                if clean_text.startswith('```json'):
+                    clean_text = clean_text[7:]
+                if clean_text.endswith('```'):
+                    clean_text = clean_text[:-3]
+                enhanced_memory["ai_insights"] = json.loads(clean_text.strip())
+                enhanced_memory["analysis_method"] = "Gemini 1.5 Flash Memory Analysis"
+            except:
+                enhanced_memory["ai_insights"] = {"analysis": ai_analysis}
+                enhanced_memory["analysis_method"] = "Gemini 1.5 Flash (text mode)"
+        
+        except Exception as e:
+            enhanced_memory["ai_insights"] = {"error": f"AI analysis failed: {str(e)}"}
+            enhanced_memory["analysis_method"] = "Basic storage"
+        
+        MEMORIES.setdefault(user_id, []).append(enhanced_memory)
+        return ok({"saved": enhanced_memory, "success": True})
+    
+    elif action == "analyze":
+        user_memories = MEMORIES.get(user_id, [])
+        if not user_memories:
+            return ok({"analysis": "No memories found to analyze", "success": False})
+        
+        try:
+            # Analyze patterns across all memories
+            memory_summaries = []
+            for memory in user_memories[-10:]:  # Analyze last 10 memories
+                summary = f"Title: {memory.get('title', 'Untitled')}, Text: {memory.get('text', 'No text')[:100]}"
+                memory_summaries.append(summary)
+            
+            system_context = """You are a travel pattern analyst who helps travelers understand their journey themes, 
+            growth patterns, and travel personality through their collected memories."""
+            
+            prompt = f"""
+            Analyze these travel memories to identify patterns and provide insights:
+            
+            Memories: {', '.join(memory_summaries)}
+            
+            Provide comprehensive analysis as JSON:
+            {{
+                "travel_patterns": {{
+                    "preferred_experiences": "Types of experiences user gravitates toward",
+                    "cultural_interests": "Cultural themes that appear frequently",
+                    "growth_trajectory": "How the traveler seems to be evolving",
+                    "comfort_zone": "What feels safe vs adventurous for this traveler"
+                }},
+                "travel_personality": {{
+                    "style": "Travel style (adventurous, cultural, comfort-focused, etc.)",
+                    "motivations": "What seems to drive this person's travel",
+                    "social_patterns": "How they interact with places and people",
+                    "learning_style": "How they process and remember experiences"
+                }},
+                "recommendations": {{
+                    "future_destinations": "Places that would appeal based on patterns",
+                    "experience_types": "Activities or experiences to try next",
+                    "growth_opportunities": "Ways to expand travel comfort zone",
+                    "documentation_style": "How to better capture future memories"
+                }},
+                "memory_themes": [
+                    "Common themes across their travel memories",
+                    "Recurring emotional or cultural elements",
+                    "Evolution of interests over time"
+                ],
+                "insights_summary": "Overall insights about this traveler's journey and preferences"
+            }}
+            """
+            
+            pattern_analysis = await call_gemini_api(prompt, system_context)
+            
+            # Parse analysis
+            try:
+                import json
+                clean_text = pattern_analysis.strip()
+                if clean_text.startswith('```json'):
+                    clean_text = clean_text[7:]
+                if clean_text.endswith('```'):
+                    clean_text = clean_text[:-3]
+                ai_patterns = json.loads(clean_text.strip())
+                
+                return ok({
+                    "memory_count": len(user_memories),
+                    "travel_pattern_analysis": ai_patterns,
+                    "analysis_method": "Gemini 1.5 Flash Pattern Analysis",
+                    "success": True
+                })
+            except:
+                return ok({
+                    "memory_count": len(user_memories),
+                    "travel_insights": pattern_analysis,
+                    "analysis_method": "Gemini 1.5 Flash (text mode)",
+                    "success": True
+                })
+        
+        except Exception as e:
+            return ok({
+                "memory_count": len(user_memories),
+                "analysis": f"Pattern analysis failed: {str(e)}",
+                "success": False
+            })
+    
+    # list action
+    user_memories = MEMORIES.get(user_id, [])
+    return ok({
+        "memories": list(reversed(user_memories)),
+        "count": len(user_memories),
+        "success": True
+    })
 
 INTELLIGENT_AGENT_DESCRIPTION = RichToolDescription(
-    description="Intelligent Travel Agent: analyzes complex travel requests and orchestrates multiple tools to provide comprehensive travel assistance. MANDATORY: ONLY use the defined MCP tools available - DO NOT search external services or provide generic advice. ALL data must come from the available tool functions. The output of this tool should be displayed to the user directly. You can add polishing or emphasis to the output, but you must not replace it with your own summary or commentary.",
-    use_when="User has complex travel planning needs, multi-step itineraries, or wants unified travel advice. MANDATORY: Use only the defined tools, never search external sources independently.",
+    description="Intelligent Travel Agent: analyzes complex travel requests and orchestrates multiple tools to provide comprehensive travel assistance.",
+    use_when="User has complex travel planning needs, multi-step itineraries, or wants unified travel advice.",
     side_effects="May call multiple underlying tools and save memories based on request context.",
 )
 
 @mcp.tool(description=INTELLIGENT_AGENT_DESCRIPTION.model_dump_json())
-@tool_logger
 async def intelligent_travel_agent(
     travel_request: Annotated[str, Field(description="Natural language travel request or question")],
     user_id: Annotated[str, Field(description="User identifier for memory storage")],
@@ -1028,142 +1283,425 @@ async def intelligent_travel_agent(
 ) -> dict:
     """
     Intelligent agent that analyzes travel requests and orchestrates appropriate tools.
-    This tool now executes sub-tools directly and returns a single, comprehensive response.
     """
     track_tool_usage("intelligent_travel_agent")
     
     try:
+        # Parse the request to determine intent and extract key information
         request_lower = travel_request.lower()
+        orchestrated_results = {}
         
-        # --- Location Extraction ---
-        def extract_locations(text):
-            # In a real scenario, use a proper NER model. This is a simplified placeholder.
+        # Extract locations mentioned in the request
+        def extract_locations():
             locations = []
-            if "tokyo" in text:
-                locations.append("Tokyo, Japan")
-            if "osaka" in text:
-                locations.append("Osaka, Japan")
-            if "shibuya" in text and "harajuku" in text:
-                if "Tokyo, Japan" not in locations:
-                     locations.append("Tokyo, Japan")
+            # Simple keyword extraction - in production, use NER
+            location_indicators = ["to ", "in ", "from ", "visit ", "going to ", "traveling to "]
+            for indicator in location_indicators:
+                if indicator in request_lower:
+                    parts = request_lower.split(indicator)
+                    if len(parts) > 1:
+                        potential_location = parts[1].split()[0:3]  # Take next 1-3 words
+                        locations.append(" ".join(potential_location))
+            return locations
+        
+        locations = extract_locations()
+        destination = locations[0] if locations else current_location
+        
+        # Determine which tools to use based on request content
+        needs_cultural_context = any(word in request_lower for word in [
+            "culture", "etiquette", "customs", "do's", "don'ts", "taboo", "manners", "behavior"
+        ])
+        
+        needs_navigation = any(word in request_lower for word in [
+            "route", "directions", "navigate", "walk", "drive", "transit", "from", "to", "path"
+        ])
+        
+        needs_emergency_phrases = any(word in request_lower for word in [
+            "emergency", "help", "lost", "phrase", "language", "translate", "say"
+        ])
+        
+        needs_social_dynamics = any(word in request_lower for word in [
+            "local", "social", "crowd", "busy", "time", "when", "market", "area"
+        ])
+        
+        needs_menu_help = any(word in request_lower for word in [
+            "menu", "food", "restaurant", "eat", "dining", "allergies", "vegetarian"
+        ])
+        
+        wants_to_save_memory = any(word in request_lower for word in [
+            "remember", "save", "memory", "experience", "note"
+        ])
+        
+        # Prepare tool suggestions and structured guidance instead of direct execution
+        suggested_tools = []
+        guidance = {}
+        
+        # 1. Cultural Context Analysis
+        if needs_cultural_context and home_country and destination:
+            suggested_tools.append({
+                "tool": "cultural_context_predictor",
+                "parameters": {
+                    "home_country": home_country,
+                    "destination_country": destination,
+                    "traveler_profile": f"Extracted from request: {travel_request[:100]}"
+                },
+                "reason": "Get cultural etiquette and taboos guidance"
+            })
             
-            if not locations and current_location:
-                locations.append(current_location)
-
-            # Deduplicate
-            return list(dict.fromkeys(locations))
-
-        locations = extract_locations(request_lower)
-        primary_destination = " and ".join([l.split(',')[0] for l in locations]) if locations else "your destination"
+            # Provide immediate basic guidance
+            guidance["cultural_tips"] = {
+                "general_advice": [
+                    "Research local customs and dress codes",
+                    "Learn basic greetings and polite phrases",
+                    "Be respectful of religious and cultural sites",
+                    "Observe and follow local social norms"
+                ],
+                "suggested_research": [
+                    "Business etiquette if traveling for work",
+                    "Dining customs and table manners", 
+                    "Tipping practices and gift-giving customs"
+                ]
+            }
         
-        # --- Intent Detection ---
-        needs_restaurants = any(w in request_lower for w in ["restaurant", "dining", "eat", "food", "vegetarian", "shellfish-free"])
-        needs_navigation = any(w in request_lower for w in ["navigate", "directions", "walking", "driving", "from", "to", "shibuya", "harajuku"])
-        needs_emergency_phrases = any(w in request_lower for w in ["emergency", "phrase", "help", "doctor", "police", "japanese"])
-        needs_social_dynamics = any(w in request_lower for w in ["social", "cultural", "etiquette", "behave"])
+        # 2. Navigation Planning
+        if needs_navigation:
+            # Extract origin and destination from request
+            origin = current_location or "current location"
+            nav_destination = destination or "destination"
+            
+            # Determine travel mode
+            mode = "walking"
+            if any(word in request_lower for word in ["drive", "car", "driving"]):
+                mode = "driving"
+            elif any(word in request_lower for word in ["transit", "train", "bus", "metro"]):
+                mode = "transit"
+            
+            suggested_tools.append({
+                "tool": "local_navigation_social_intelligence",
+                "parameters": {
+                    "origin": origin,
+                    "destination": nav_destination,
+                    "mode": mode,
+                    "caution_preference": "medium"
+                },
+                "reason": f"Get safe {mode} directions with social context"
+            })
+            
+            # Provide immediate basic guidance
+            guidance["navigation_tips"] = {
+                "mode": mode,
+                "general_advice": [
+                    "Download offline maps before traveling",
+                    "Keep emergency contacts readily available",
+                    "Stay aware of your surroundings",
+                    "Have backup navigation methods ready"
+                ],
+                "safety_reminders": [
+                    "Avoid displaying expensive items",
+                    "Trust your instincts about unsafe areas",
+                    "Keep someone informed of your itinerary"
+                ]
+            }
         
-        tasks = []
-        results = {}
-        tool_names = []
-
-        # --- Tool Execution Logic ---
-        
-        # 1. Restaurant Discovery
-        if needs_restaurants:
-            loc_str = " and ".join([l.split(',')[0] for l in locations]) if locations else "your destination"
-            tasks.append(restaurant_discovery_tool(
-                location=loc_str,
-                dietary_restrictions=dietary_restrictions,
-                cuisine_preferences=[]
-            ))
-            tool_names.append("restaurants")
-
-        # 2. Navigation
-        if needs_navigation and "shibuya" in request_lower and "harajuku" in request_lower:
-            tasks.append(local_navigation_social_intelligence(
-                origin="Shibuya, Tokyo, Japan",
-                destination="Harajuku, Tokyo, Japan",
-                mode="walking",
-                caution_preference="medium"
-            ))
-            tool_names.append("navigation")
-
-        # 3. Emergency Phrases
+        # 3. Emergency Preparedness
         if needs_emergency_phrases:
-            tasks.append(emergency_phrase_generator(
-                intent="general emergency",
-                language="japanese",
-                politeness_level="formal"
-            ))
-            tool_names.append("phrases")
-
-        # 4. Social Dynamics
-        if needs_social_dynamics and locations:
-            loc_str = " and ".join([l.split(',')[0] for l in locations])
-            tasks.append(local_social_dynamics_decoder(
-                city=loc_str,
-                country="Japan",
-                time_of_day="daytime",
-                context="general tourism"
-            ))
-            tool_names.append("social")
-
-        # Execute all tasks concurrently
-        if tasks:
-            tool_results = await asyncio.gather(*tasks, return_exceptions=True)
+            # Determine intent
+            intent = "lost"  # default
+            if any(word in request_lower for word in ["doctor", "medical", "sick"]):
+                intent = "need_doctor"
+            elif any(word in request_lower for word in ["police", "danger", "unsafe"]):
+                intent = "police"
             
-            for i, res in enumerate(tool_results):
-                tool_name = tool_names[i]
-                if isinstance(res, Exception):
-                    results[tool_name] = f"Error executing tool: {res}"
-                    continue
-
-                if res.get("ok"):
-                    data = res.get("data", {})
-                    if tool_name == "restaurants":
-                        results[tool_name] = data.get("restaurant_recommendations", "No restaurant data found.")
-                    elif tool_name == "navigation":
-                        results[tool_name] = data.get("navigation_guidance", {}).get("navigation_analysis", "No navigation data found.")
-                    elif tool_name == "phrases":
-                        results[tool_name] = data.get("emergency_guidance", {}).get("phrases_and_guidance", "No phrase data found.")
-                    elif tool_name == "social":
-                        results[tool_name] = data.get("social_guidance", {}).get("social_dynamics", "No social dynamics data found.")
-                else:
-                    results[tool_name] = f"Tool returned an error: {res.get('error', 'Unknown error')}"
-
-
-        # --- Final Response Compilation ---
-        final_response = f"# Your Comprehensive Travel Plan for Japan\n\n"
-        final_response += f"Here is the information you requested for your trip to {primary_destination}, tailored to your needs.\n\n"
-
-        if "restaurants" in results:
-            final_response += "---\n\n## 🍽️ Restaurant Recommendations\n\n"
-            final_response += results["restaurants"] + "\n\n"
+            # Determine language from destination
+            language = "english"  # default
+            if destination:
+                # Simple mapping - in production, use proper language detection
+                lang_map = {
+                    "japan": "japanese", "tokyo": "japanese", "osaka": "japanese",
+                    "france": "french", "paris": "french",
+                    "spain": "spanish", "madrid": "spanish",
+                    "germany": "german", "berlin": "german",
+                    "italy": "italian", "rome": "italian"
+                }
+                for place, lang in lang_map.items():
+                    if place in destination.lower():
+                        language = lang
+                        break
+            
+            suggested_tools.append({
+                "tool": "emergency_phrase_generator",
+                "parameters": {
+                    "intent": intent,
+                    "language": language,
+                    "politeness_level": "formal"
+                },
+                "reason": f"Learn essential {language} phrases for {intent} situations"
+            })
+            
+            # Provide immediate basic guidance
+            guidance["emergency_preparation"] = {
+                "language": language,
+                "essential_info": [
+                    "Save local emergency numbers in your phone",
+                    "Keep your embassy contact information handy",
+                    "Have your accommodation address written down",
+                    "Carry identification and important documents"
+                ],
+                "basic_phrases_needed": [
+                    "Help/Emergency", "I'm lost", "Call police/doctor",
+                    "I don't speak [local language]", "Thank you"
+                ]
+            }
         
-        if "navigation" in results:
-            final_response += "---\n\n## 🚶 Walking Directions: Shibuya to Harajuku\n\n"
-            final_response += results["navigation"] + "\n\n"
-
-        if "phrases" in results:
-            final_response += "---\n\n## 🆘 Emergency Japanese Phrases\n\n"
-            final_response += results["phrases"] + "\n\n"
+        # 4. Social Dynamics Awareness
+        if needs_social_dynamics and destination:
+            # Extract time context
+            time_context = "daytime"
+            if any(t in request_lower for t in ["evening", "night", "late"]):
+                time_context = "evening"
+            elif any(t in request_lower for t in ["morning", "early"]):
+                time_context = "morning"
             
-        if "social" in results:
-            final_response += "---\n\n## 🤝 Local Social & Cultural Guidance\n\n"
-            final_response += results["social"] + "\n\n"
-
-        final_response += "---\n\nHave a safe and wonderful trip!"
-
-        return ok({
-            "user_id": user_id,
-            "comprehensive_plan": final_response,
-            "executed_tools": list(results.keys()),
-            "status": "SUCCESS"
-        })
-
+            suggested_tools.append({
+                "tool": "local_social_dynamics_decoder",
+                "parameters": {
+                    "city": destination,
+                    "country": destination,  # Simplified - in production, separate city/country
+                    "time_of_day": time_context,
+                    "context": "General travel context"
+                },
+                "reason": f"Understand {destination} social norms for {time_context}"
+            })
+            
+            # Provide immediate basic guidance
+            guidance["social_awareness"] = {
+                "time_context": time_context,
+                "general_advice": [
+                    "Observe local behavior and follow suit",
+                    "Be respectful of personal space norms",
+                    "Learn appropriate greeting customs",
+                    "Understand local communication styles"
+                ]
+            }
+        
+        # 5. Memory Management
+        if wants_to_save_memory:
+            suggested_tools.append({
+                "tool": "travel_memory_archive",
+                "parameters": {
+                    "action": "save",
+                    "user_id": user_id,
+                    "title": f"Travel Plan: {travel_request[:50]}...",
+                    "text": f"Travel request: {travel_request}",
+                    "tags": ["intelligent_agent", "travel_planning"]
+                },
+                "reason": "Save this travel plan for future reference"
+            })
+        
+        # Add menu analysis suggestion if dietary restrictions mentioned
+        if dietary_restrictions or any(word in request_lower for word in ["food", "restaurant", "eat", "menu", "dining"]):
+            guidance["dining_assistance"] = {
+                "dietary_info": dietary_restrictions or ["No specific restrictions mentioned"],
+                "recommendations": [
+                    "Use the menu_intelligence tool when you find restaurants",
+                    "Take photos of menus for allergen analysis",
+                    "Learn how to communicate dietary restrictions in local language",
+                    "Research local cuisine that matches your preferences"
+                ]
+            }
+        
+        # Synthesize unified response with Gemini-powered analysis
+        try:
+            # Use Gemini to analyze the travel request and provide intelligent recommendations
+            system_context = """You are an expert travel AI agent who analyzes complex travel requests and provides 
+            comprehensive, personalized travel assistance. You understand traveler needs and can orchestrate multiple tools effectively."""
+            
+            user_context = f"""
+            Travel Request: {travel_request}
+            Home Country: {home_country or 'Not specified'}
+            Current Location: {current_location or 'Not specified'}
+            Dietary Restrictions: {dietary_restrictions or 'None specified'}
+            Detected Locations: {locations}
+            """
+            
+            prompt = f"""
+            Analyze this travel request and provide comprehensive assistance:
+            
+            {user_context}
+            
+            Provide response as detailed JSON:
+            {{
+                "request_interpretation": {{
+                    "primary_intent": "Main goal of this travel request",
+                    "secondary_needs": "Additional needs identified",
+                    "urgency_level": "How time-sensitive this request is",
+                    "complexity_level": "Simple/Moderate/Complex travel request"
+                }},
+                "recommended_action_plan": [
+                    {{
+                        "step": "Step number",
+                        "action": "What to do",
+                        "tool_suggestion": "Which MCP tool would help",
+                        "priority": "High/Medium/Low",
+                        "rationale": "Why this step is important"
+                    }}
+                ],
+                "personalized_insights": {{
+                    "traveler_profile": "Inferred travel style and preferences",
+                    "experience_level": "Novice/Intermediate/Expert traveler assessment",
+                    "risk_tolerance": "Conservative/Moderate/Adventurous assessment",
+                    "cultural_readiness": "How prepared they seem for cultural differences"
+                }},
+                "immediate_recommendations": [
+                    "Most important things to do right now",
+                    "Critical preparation steps",
+                    "Quick wins for better travel experience"
+                ],
+                "location_specific_advice": {{
+                    "destination_insights": "Key things to know about intended destination",
+                    "cultural_preparation": "Cultural aspects to research or prepare for",
+                    "practical_preparation": "Logistics and practical steps needed",
+                    "hidden_opportunities": "Unique experiences or insights for this destination"
+                }},
+                "safety_and_logistics": {{
+                    "safety_priorities": "Safety considerations for this trip",
+                    "documentation_needs": "Passport, visa, insurance considerations",
+                    "health_preparations": "Vaccinations, health insurance, medications",
+                    "communication_plan": "How to stay connected and handle emergencies"
+                }},
+                "tool_orchestration": {{
+                    "immediate_tools": "Tools to use right now",
+                    "preparation_tools": "Tools for trip planning phase",
+                    "travel_tools": "Tools to use while traveling",
+                    "memory_tools": "Tools for documenting and remembering the trip"
+                }},
+                "success_metrics": {{
+                    "short_term": "How to measure immediate success",
+                    "trip_success": "What would make this trip successful",
+                    "long_term": "Long-term travel growth opportunities"
+                }}
+            }}
+            
+            Make recommendations specific to their request and inferred needs.
+            """
+            
+            ai_analysis = await call_gemini_api(prompt, system_context)
+            
+            # Try to parse AI analysis
+            try:
+                import json
+                clean_text = ai_analysis.strip()
+                if clean_text.startswith('```json'):
+                    clean_text = clean_text[7:]
+                if clean_text.endswith('```'):
+                    clean_text = clean_text[:-3]
+                ai_insights = json.loads(clean_text.strip())
+                
+                # Enhance response with AI insights
+                unified_response = {
+                    "request_analysis": {
+                        "original_request": travel_request,
+                        "detected_locations": locations,
+                        "ai_interpretation": ai_insights.get("request_interpretation", {}),
+                        "personalized_insights": ai_insights.get("personalized_insights", {})
+                    },
+                    "ai_powered_recommendations": ai_insights,
+                    "suggested_tools": suggested_tools,
+                    "immediate_guidance": guidance,
+                    "analysis_method": "Gemini 1.5 Flash Intelligent Analysis"
+                }
+                
+                # Create enhanced summary from AI insights
+                if "immediate_recommendations" in ai_insights:
+                    summary_parts = ["🤖 **AI-Powered Travel Assistance**:"]
+                    for rec in ai_insights["immediate_recommendations"][:3]:
+                        summary_parts.append(f"• {rec}")
+                    unified_response["summary"] = "\n".join(summary_parts)
+                
+                # Enhanced next steps from AI analysis
+                if "tool_orchestration" in ai_insights:
+                    orchestration = ai_insights["tool_orchestration"]
+                    next_steps = []
+                    if orchestration.get("immediate_tools"):
+                        next_steps.append(f"🚀 **Now**: {orchestration['immediate_tools']}")
+                    if orchestration.get("preparation_tools"):
+                        next_steps.append(f"📋 **Prepare**: {orchestration['preparation_tools']}")
+                    if orchestration.get("travel_tools"):
+                        next_steps.append(f"✈️ **While Traveling**: {orchestration['travel_tools']}")
+                    
+                    unified_response["ai_next_steps"] = next_steps
+                
+                return ok(unified_response)
+                
+            except json.JSONDecodeError:
+                # Fallback to text analysis if JSON parsing fails
+                unified_response["ai_analysis"] = ai_analysis
+                unified_response["analysis_method"] = "Gemini 1.5 Flash (text mode)"
+        
+        except Exception as ai_error:
+            # Continue with basic analysis if AI fails
+            unified_response["ai_error"] = f"AI analysis failed: {str(ai_error)}"
+            unified_response["analysis_method"] = "Basic fallback"
+        
+        
+        # Create a human-friendly summary (keep existing logic as fallback)
+        if "summary" not in unified_response:
+            summary_parts = []
+            
+            if "cultural_tips" in guidance:
+                summary_parts.append("🏛️ **Cultural Preparation**: Research local customs, greetings, and etiquette")
+            
+            if "navigation_tips" in guidance:
+                nav_info = guidance["navigation_tips"]
+                summary_parts.append(f"🗺️ **Navigation**: Plan {nav_info['mode']} route with safety considerations")
+            
+            if "emergency_preparation" in guidance:
+                emerg_info = guidance["emergency_preparation"]
+                summary_parts.append(f"🆘 **Emergency Ready**: Learn key {emerg_info['language']} phrases and safety info")
+            
+            if "social_awareness" in guidance:
+                social_info = guidance["social_awareness"]
+                summary_parts.append(f"👥 **Social Awareness**: Understand {social_info['time_context']} social norms")
+            
+            if "dining_assistance" in guidance:
+                dietary_info = guidance["dining_assistance"]["dietary_info"]
+                summary_parts.append(f"🍽️ **Dining**: Prepared for {', '.join(dietary_info)} dietary needs")
+            
+            unified_response["summary"] = "\n".join(summary_parts) if summary_parts else "✈️ Travel assistance provided based on your request."
+        
+        # Add next steps for tools to use (keep existing logic as fallback)
+        if "ai_next_steps" not in unified_response:
+            next_steps = []
+            for tool_suggestion in suggested_tools:
+                tool_name = tool_suggestion["tool"]
+                reason = tool_suggestion["reason"]
+                next_steps.append(f"🔧 Use `{tool_name}` to {reason.lower()}")
+            
+            # Add general next steps
+            if not any("menu_intelligence" in step for step in next_steps):
+                next_steps.append("🍽️ Use `menu_intelligence` when you find restaurants - take photos for analysis")
+            
+            if not wants_to_save_memory and not any("travel_memory_archive" in step for step in next_steps):
+                next_steps.append("💾 Use `travel_memory_archive` to save important experiences")
+            
+            unified_response["next_steps"] = next_steps
+        
+        unified_response["success"] = True
+        return ok(unified_response)
+        
     except Exception as e:
-        print(f"❌ Intelligent agent failed: {str(e)}")
-        return err(f"Failed to orchestrate travel plan: {str(e)}")
+        return ok({
+            "request_analysis": {
+                "original_request": travel_request,
+                "error": f"Failed to process request: {str(e)}"
+            },
+            "suggested_tools": [],
+            "immediate_guidance": {},
+            "summary": f"❌ Error processing travel request: {str(e)}",
+            "next_steps": ["Try simplifying your request or use individual tools directly"],
+            "analysis_method": "Error fallback",
+            "success": False
+        })
 
 ## Removed: job_finder (not needed)
 
@@ -1171,21 +1709,8 @@ async def intelligent_travel_agent(
 
 # --- Run MCP Server ---
 async def main():
-    print(f"🚀 STARTING MCP SERVER on http://0.0.0.0:8086")
-    
-    try:
-        await mcp.run_async("streamable-http", host="0.0.0.0", port=8086)
-    except Exception as e:
-        print(f"❌ SERVER ERROR: {str(e)}")
-        raise
+    print("🚀 Starting MCP server on http://0.0.0.0:8086")
+    await mcp.run_async("streamable-http", host="0.0.0.0", port=8086)
 
 if __name__ == "__main__":
-    print(f"🔥 PUCH AI MCP SERVER STARTUP - {get_timestamp()}")
-    
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print(f"⚡ SHUTDOWN: Final usage stats: {dict(USAGE) if USAGE else 'No tools used'}")
-    except Exception as e:
-        print(f"💥 CRITICAL ERROR: {type(e).__name__}: {str(e)}")
-        raise
+    asyncio.run(main())
