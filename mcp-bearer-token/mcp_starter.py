@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field, AnyUrl
 import json
 import functools
 import inspect
+from fastapi import FastAPI, BackgroundTasks
+from fastapi.responses import JSONResponse
 
 import markdownify
 import httpx
@@ -25,8 +27,61 @@ import google.generativeai as genai
 import asyncio
 from functools import lru_cache
 
+# Keep-alive functionality
+import threading
+import requests
+
 # --- Load environment variables ---
 load_dotenv()
+
+# ===== KEEP-ALIVE SYSTEM =====
+class KeepAliveManager:
+    def __init__(self, server_url: str, interval_minutes: int = 10):
+        self.server_url = server_url.rstrip('/')
+        self.interval = interval_minutes * 60  # Convert to seconds
+        self.running = False
+        self.thread = None
+        self.last_ping_time = None
+        
+    def start(self):
+        """Start the keep-alive background thread"""
+        if not self.running:
+            self.running = True
+            self.thread = threading.Thread(target=self._keep_alive_loop, daemon=True)
+            self.thread.start()
+            print(f"🔄 Keep-alive started: pinging {self.server_url} every {self.interval//60} minutes")
+    
+    def stop(self):
+        """Stop the keep-alive background thread"""
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=5)
+            print("⏹️ Keep-alive stopped")
+    
+    def _keep_alive_loop(self):
+        """Background loop to ping the server"""
+        while self.running:
+            try:
+                response = requests.get(
+                    f"{self.server_url}/health",
+                    timeout=30,
+                    headers={'User-Agent': 'KeepAlive-Bot/1.0'}
+                )
+                self.last_ping_time = datetime.now()
+                
+                if response.status_code == 200:
+                    print(f"✅ Keep-alive ping successful: {self.last_ping_time.strftime('%H:%M:%S')}")
+                else:
+                    print(f"⚠️ Keep-alive ping returned {response.status_code}")
+                    
+            except Exception as e:
+                print(f"❌ Keep-alive ping failed: {str(e)}")
+            
+            # Wait for the next interval
+            time.sleep(self.interval)
+
+# Global keep-alive manager
+keep_alive_manager = None
 
 # ===== COMPREHENSIVE LOGGING SYSTEM =====
 def get_timestamp():
@@ -1767,14 +1822,105 @@ async def intelligent_travel_agent(
 
 ## Removed: make_img_black_and_white (not needed)
 
+# ===== HEALTH CHECK AND STATUS ENDPOINTS =====
+@mcp.tool()
+def health_check() -> str:
+    """
+    Health check endpoint for monitoring and keep-alive purposes.
+    Returns server status and uptime information.
+    """
+    log_input("health_check")
+    
+    try:
+        current_time = datetime.now()
+        uptime_info = {
+            "status": "healthy",
+            "timestamp": current_time.isoformat(),
+            "server": "Puch AI MCP Server",
+            "version": "1.0.0",
+            "uptime_seconds": (current_time - datetime.now().replace(microsecond=0)).total_seconds(),
+        }
+        
+        # Add keep-alive status if available
+        if keep_alive_manager and keep_alive_manager.last_ping_time:
+            uptime_info["last_self_ping"] = keep_alive_manager.last_ping_time.isoformat()
+            uptime_info["keep_alive_active"] = keep_alive_manager.running
+        
+        result = json.dumps(uptime_info, indent=2)
+        log_output("health_check", uptime_info, success=True)
+        return result
+        
+    except Exception as e:
+        log_error("health_check", e)
+        error_response = {
+            "status": "error",
+            "timestamp": datetime.now().isoformat(),
+            "error": str(e)
+        }
+        return json.dumps(error_response, indent=2)
+
+@mcp.tool()
+def server_status() -> str:
+    """
+    Get detailed server status including tool usage statistics and system info.
+    """
+    log_input("server_status")
+    
+    try:
+        status_info = {
+            "server_name": "Puch AI MCP Server",
+            "status": "running",
+            "timestamp": datetime.now().isoformat(),
+            "total_tool_calls": sum(USAGE.values()) if USAGE else 0,
+            "tool_usage_breakdown": dict(USAGE) if USAGE else {},
+            "available_tools": [
+                "travel_advisor",
+                "restaurant_discovery_tool", 
+                "web_content_extractor",
+                "health_check",
+                "server_status"
+            ],
+            "keep_alive_status": {
+                "active": keep_alive_manager.running if keep_alive_manager else False,
+                "last_ping": keep_alive_manager.last_ping_time.isoformat() if (keep_alive_manager and keep_alive_manager.last_ping_time) else None,
+                "ping_interval_minutes": keep_alive_manager.interval // 60 if keep_alive_manager else None
+            }
+        }
+        
+        result = json.dumps(status_info, indent=2)
+        log_output("server_status", status_info, success=True)
+        return result
+        
+    except Exception as e:
+        log_error("server_status", e)
+        error_response = {
+            "status": "error",
+            "timestamp": datetime.now().isoformat(),
+            "error": str(e)
+        }
+        return json.dumps(error_response, indent=2)
+
 # --- Run MCP Server ---
 async def main():
+    global keep_alive_manager
+    
     print(f"🚀 STARTING MCP SERVER on http://0.0.0.0:8086")
+    
+    # Initialize keep-alive system for Render deployment
+    render_url = os.getenv("RENDER_SERVICE_URL", "https://puch-ai-ssnl.onrender.com")
+    keep_alive_manager = KeepAliveManager(render_url, interval_minutes=10)
+    
+    # Start keep-alive if running on Render (detected by environment variable)
+    if os.getenv("RENDER") or "onrender.com" in render_url:
+        keep_alive_manager.start()
+        print(f"🔄 Keep-alive system activated for Render deployment")
     
     try:
         await mcp.run_async("streamable-http", host="0.0.0.0", port=8086)
     except Exception as e:
         print(f"❌ SERVER ERROR: {str(e)}")
+        if keep_alive_manager:
+            keep_alive_manager.stop()
         raise
 
 if __name__ == "__main__":
@@ -1784,6 +1930,10 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print(f"⚡ SHUTDOWN: Final usage stats: {dict(USAGE) if USAGE else 'No tools used'}")
+        if keep_alive_manager:
+            keep_alive_manager.stop()
     except Exception as e:
         print(f"💥 CRITICAL ERROR: {type(e).__name__}: {str(e)}")
+        if keep_alive_manager:
+            keep_alive_manager.stop()
         raise

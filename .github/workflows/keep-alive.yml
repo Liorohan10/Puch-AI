@@ -1,0 +1,64 @@
+name: Keep Render Service Alive
+
+on:
+  schedule:
+    # Run every 10 minutes
+    - cron: '*/10 * * * *'
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Ping Render Service
+      run: |
+        echo "🔄 Pinging Render service to keep it alive..."
+        
+        # Health check endpoint
+        response=$(curl -s -o /dev/null -w "%{http_code}" \
+          --max-time 30 \
+          --retry 2 \
+          --retry-delay 5 \
+          -H "User-Agent: GitHub-Actions-KeepAlive/1.0" \
+          "https://puch-ai-ssnl.onrender.com/health" || echo "000")
+        
+        echo "Health check response: $response"
+        
+        if [ "$response" -eq 200 ]; then
+          echo "✅ Health check successful!"
+        else
+          echo "⚠️ Health check failed, trying root endpoint..."
+          
+          # Fallback to root endpoint
+          root_response=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 30 \
+            --retry 2 \
+            --retry-delay 5 \
+            -H "User-Agent: GitHub-Actions-KeepAlive/1.0" \
+            "https://puch-ai-ssnl.onrender.com" || echo "000")
+          
+          echo "Root endpoint response: $root_response"
+          
+          if [ "$root_response" -ge 200 ] && [ "$root_response" -lt 500 ]; then
+            echo "✅ Fallback ping successful!"
+          else
+            echo "❌ Both endpoints failed"
+            exit 1
+          fi
+        fi
+        
+        echo "🎉 Keep-alive ping completed at $(date)"
+
+    - name: Log Success
+      if: success()
+      run: |
+        echo "✅ Keep-alive job completed successfully"
+        echo "Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+
+    - name: Log Failure
+      if: failure()
+      run: |
+        echo "❌ Keep-alive job failed"
+        echo "Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+        echo "This might indicate the service is down or unreachable"

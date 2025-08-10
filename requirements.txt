@@ -11,3 +11,6 @@ pytesseract>=0.3.10
 opencv-python>=4.8.0
 numpy>=1.24.0
 google-generativeai>=0.3.0
+requests>=2.31.0
+fastapi>=0.104.0
+schedule>=1.2.0
