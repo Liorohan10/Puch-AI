@@ -230,18 +230,6 @@ We're competing in the **Puch AI Hackathon**, and every user who tries our tool 
 
 ---
 
-## 🔥 **Coming Soon**
-
-We're already working on exciting new features rolling out tomorrow:
-- Hotel booking integration
-- Real-time language translation
-- Group travel planning
-- Expense tracking with cultural context
-- Local event recommendations
-- Weather-adaptive suggestions
-
----
-
 ## 🌟 **Ready to Transform Your Travel?**
 
 Join thousands of travelers who are already exploring the world with confidence, cultural awareness, and insider knowledge!
@@ -249,24 +237,6 @@ Join thousands of travelers who are already exploring the world with confidence,
 **👉 Start now:** [https://puch.ai/hi](https://puch.ai/hi)
 **🔑 Activate:** Type `/mcp use k9beoH4QEo`
 **🗣️ Ask anything:** "Hi! I'm planning a trip to [destination]. Can you help me?"
-
----
-
-## 🛠️ **Technical Details** (For the curious)
-
-**Powered by:**
-- Google Gemini 2.5 Flash Lite AI
-- Real-time web search integration
-- MCP (Model Context Protocol) server
-- Auto-scaling cloud deployment
-- Advanced natural language processing
-- Multi-tool orchestration system
-
-**Privacy & Security:**
-- No personal data stored without your permission
-- Real-time data ensures accuracy
-- Cultural sensitivity built-in
-- Safety-first recommendations
 
 ---
 
