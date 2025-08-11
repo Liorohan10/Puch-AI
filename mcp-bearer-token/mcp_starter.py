@@ -1441,11 +1441,15 @@ async def local_navigation_social_intelligence(
     destination: Annotated[str, Field(description="End location (address or lat,lng)")],
     mode: Annotated[Literal["walking", "driving", "transit"], Field(description="Travel mode")]="walking",
     caution_preference: Annotated[Literal["low", "medium", "high"], Field(description="How cautious to be")]="medium",
+    time_of_day: Annotated[str, Field(description="Time of day for the route (e.g., '9 PM', '21:00', 'evening')")]="",
 ) -> dict:
     track_tool_usage("local_navigation_social_intelligence")
     
+    # Add time context if provided
+    time_context = f" at {time_of_day}" if time_of_day else ""
+    
     prompt = f"""
-Provide detailed navigation guidance and social intelligence for traveling from {origin} to {destination} by {mode}, with {caution_preference} caution preference.
+Provide detailed navigation guidance and social intelligence for traveling from {origin} to {destination} by {mode}{time_context}, with {caution_preference} caution preference.
 
 Please include current, real-time information about:
 
@@ -1456,7 +1460,7 @@ Please include current, real-time information about:
    - Alternative routes in case of disruptions
 
 2. **Safety Assessment**:
-   - Safety level of the route during different times of day
+   - Safety level of the route during different times of day{f" (especially for {time_of_day})" if time_of_day else ""}
    - Areas to be particularly cautious about
    - Well-lit and well-trafficked paths vs isolated areas
    - Emergency services availability along the route
@@ -1497,6 +1501,7 @@ Please provide step-by-step guidance that prioritizes safety while being cultura
             "route": f"{origin} → {destination}",
             "travel_mode": mode,
             "caution_level": caution_preference,
+            "time_of_day": time_of_day if time_of_day else "Not specified",
             "source": "Gemini with Google Search grounding",
             "generated_at": datetime.utcnow().isoformat()
         }
@@ -1509,6 +1514,7 @@ Please provide step-by-step guidance that prioritizes safety while being cultura
             "destination": destination,
             "mode": mode,
             "caution_preference": caution_preference,
+            "time_of_day": time_of_day,
             "navigation_guidance": navigation_guidance,
             "data_freshness": "Real-time grounded information",
             "success": True
@@ -1657,7 +1663,8 @@ async def smart_navigation_search(
             origin=parsed_params["origin"],
             destination=parsed_params["destination"], 
             mode=parsed_params["mode"],
-            caution_preference=parsed_params["caution_preference"]
+            caution_preference=parsed_params["caution_preference"],
+            time_of_day=parsed_params["time_of_day"]
         )
         
         if result.get("success"):
