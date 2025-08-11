@@ -21,6 +21,7 @@ import readabilipy
 import time
 import uuid
 from datetime import datetime, timedelta
+from textwrap import dedent
 
 # Import Gemini with Grounding
 import google.generativeai as genai
@@ -559,6 +560,67 @@ async def get_gemini_performance_stats() -> dict:
 async def validate() -> str:
     # Return phone number in {country_code}{number}
     return MY_NUMBER
+
+# --- Tool: About (Server Information) ---
+@mcp.tool
+@tool_logger
+async def about() -> dict[str, str]:
+    """Get information about this AI Travel Assistant MCP server"""
+    server_name = "AI Travel Companion by Team Skynet"
+    server_description = dedent("""
+    🌟 Your Intelligent Travel Assistant - Built for Puch AI Hackathon by Team Skynet 🌟
+    
+    This comprehensive AI Travel Assistant is your personal cultural guide, safety advisor, 
+    and travel planner all in one. We provide real-time, culturally-aware travel intelligence 
+    that goes far beyond basic search - think of us as your local friend in every city!
+    
+    🚀 Key Features:
+    • Cultural Context Predictor - Navigate etiquette & customs like a local
+    • Social Dynamics Decoder - Understand local behavior in any setting  
+    • Emergency Phrase Generator - Essential phrases with pronunciation guides
+    • Restaurant Discovery - Find authentic spots with live data & insider tips
+    • Local Cuisine Explorer - Safe dishes for any diet/allergy requirements
+    • Navigation Intelligence - Safety-first routes with cultural awareness
+    • Flight & Transport Search - Real-time pricing across all transport modes
+    • Smart Travel Search - Natural language queries, AI handles everything
+    • Intelligent Travel Agent - Complete multi-step itinerary planning
+    
+    � Sample Prompts - Try These:
+    
+    Cultural Intelligence:
+    • "I'm from USA traveling to Japan - what cultural etiquette should I know?"
+    • "How do people behave in Bangkok night markets?"
+    
+    Food & Dining:
+    • "Find vegetarian restaurants in Rome with medium budget"
+    • "What authentic dishes should I try in Thailand? I have nut allergies"
+    
+    Transport & Navigation:
+    • "Show me transport from Delhi to Goa on September 15th"
+    • "Safe walking route from Eiffel Tower to Louvre at 9 PM"
+    
+    Emergency & Safety:
+    • "I need help phrases in French with pronunciation"
+    • "Emergency contacts and safety tips for solo travel in Bangkok"
+    
+    Smart Planning:
+    • "Plan my Tokyo day: morning temple visit, lunch, shopping, evening dinner"
+    • "Cheap flights to Paris, vegetarian food in Lyon"
+    • "Travel to Moscow from Kolkata on 28th August 2025"
+    
+    �💡 What makes us special:
+    No forms, no apps to download. Just chat naturally in plain English and our AI 
+    orchestrates cultural intelligence, safety guidance, restaurant recommendations, 
+    and navigation automatically!
+    
+    Built with ❤️ by Team Skynet (Rohan, Harshit Singhania, Sayandeep Dey) for the 
+    Puch AI Hackathon. Travel smart. Travel safe. Travel like you have a local friend everywhere.
+    """)
+
+    return {
+        "name": server_name,
+        "description": server_description
+    }
 
 # --- Usage tracking ---
 USAGE: dict[str, int] = {}
