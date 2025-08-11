@@ -53,6 +53,18 @@ Discover must-try local dishes, food culture highlights, and allergen/dietary in
 **Example:** *"What authentic dishes should I try in Thailand? I have nut allergies."*
 **You get:** Safe local dishes, ingredients to avoid, cultural food significance, and where to find them.
 
+### 📸 **Menu Translation & Food Recommendations**
+Upload any menu photo and get instant translation plus personalized food recommendations based on your allergies, budget, and preferences!
+
+**Example:** *Upload a menu photo + "I have nut allergies and medium budget"*
+**You get:** 
+- Complete menu translation in your language
+- 3-5 safe dish recommendations within budget
+- Dishes to avoid due to allergies
+- Pronunciation guides for ordering
+- Cultural context for unfamiliar dishes
+- Budget optimization tips
+
 ### 🧭 **Navigation Intelligence**
 Smart route guidance that factors in local safety tips and cultural considerations for any time of day.
 
@@ -166,6 +178,11 @@ Just type normally - no special commands needed!
 
 **AI responds:** Safe street food options, exact locations, what to avoid, how to communicate allergies in Hindi, and insider tips!
 
+### 📸 **Menu Translation:**
+**You type:** *"Help me understand this Japanese menu"* (upload restaurant menu photo)
+
+**AI responds:** Complete menu translation in English + safe recommendations for dairy allergies + pronunciation guide + cultural context + budget-friendly options under ¥2000!
+
 ---
 
 ## 🎯 **Perfect For:**
@@ -198,6 +215,14 @@ Every recommendation considers your safety:
 
 ### 🌐 **Works Worldwide**
 Comprehensive coverage for 100+ countries with detailed local knowledge for major destinations in Asia, Europe, Americas, Middle East, Africa, and Oceania.
+
+### 📱 **Smart Image Processing**
+Advanced visual AI capabilities:
+- Instant menu translation from photos
+- Food allergy detection and warnings
+- Cultural context for unfamiliar dishes
+- Budget-appropriate recommendations
+- Pronunciation guides for ordering
 
 ---
 
