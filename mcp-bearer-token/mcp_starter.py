@@ -1523,6 +1523,174 @@ Please provide step-by-step guidance that prioritizes safety while being cultura
         print(f"❌ Navigation analysis failed: {str(e)}")
         return err(f"Failed to get navigation guidance: {str(e)}")
 
+# ===== SMART NAVIGATION TOOL =====
+
+def parse_navigation_query(query: str) -> dict:
+    """
+    Helper function to extract navigation parameters from natural language queries.
+    
+    Args:
+        query: Natural language navigation query
+        
+    Returns:
+        Dictionary with extracted parameters
+    """
+    import re
+    
+    # Initialize default values
+    parsed = {
+        "origin": "",
+        "destination": "",
+        "mode": "walking",
+        "time_of_day": "",
+        "caution_preference": "medium",
+        "safety_focus": False
+    }
+    
+    # Convert to lowercase for pattern matching
+    query_lower = query.lower()
+    
+    # Extract safety/caution preferences
+    if any(word in query_lower for word in ["safe", "safety", "secure", "caution", "careful"]):
+        parsed["caution_preference"] = "high"
+        parsed["safety_focus"] = True
+    elif any(word in query_lower for word in ["quick", "fast", "direct", "shortest"]):
+        parsed["caution_preference"] = "low"
+    
+    # Extract travel mode
+    if any(word in query_lower for word in ["walk", "walking", "foot", "on foot"]):
+        parsed["mode"] = "walking"
+    elif any(word in query_lower for word in ["drive", "driving", "car", "taxi", "uber"]):
+        parsed["mode"] = "driving" 
+    elif any(word in query_lower for word in ["transit", "public", "bus", "metro", "subway", "train"]):
+        parsed["mode"] = "transit"
+    
+    # Extract time of day
+    time_patterns = [
+        r'(\d{1,2})\s*(?::|\.)\s*(\d{2})\s*([ap]m)?',
+        r'(\d{1,2})\s*([ap]m)',
+        r'at\s+(\d{1,2})\s*(?::|\.)\s*(\d{2})',
+        r'at\s+(\d{1,2})\s*([ap]m)?'
+    ]
+    
+    for pattern in time_patterns:
+        match = re.search(pattern, query_lower)
+        if match:
+            if len(match.groups()) >= 2 and match.group(2):
+                if match.group(2) in ['am', 'pm']:
+                    hour = int(match.group(1))
+                    if match.group(2) == 'pm' and hour != 12:
+                        hour += 12
+                    elif match.group(2) == 'am' and hour == 12:
+                        hour = 0
+                    parsed["time_of_day"] = f"{hour:02d}:00"
+                else:
+                    # Assume it's minute part
+                    parsed["time_of_day"] = f"{match.group(1)}:{match.group(2)}"
+            else:
+                hour = int(match.group(1))
+                # Check for PM indicators in the query
+                if any(indicator in query_lower for indicator in ['pm', 'evening', 'night']):
+                    if hour != 12:
+                        hour += 12
+                parsed["time_of_day"] = f"{hour:02d}:00"
+            break
+    
+    # If no specific time found, check for general time indicators
+    if not parsed["time_of_day"]:
+        if any(word in query_lower for word in ["morning", "am"]):
+            parsed["time_of_day"] = "09:00"
+        elif any(word in query_lower for word in ["afternoon", "noon"]):
+            parsed["time_of_day"] = "14:00"
+        elif any(word in query_lower for word in ["evening", "night", "pm"]):
+            parsed["time_of_day"] = "21:00"
+    
+    # Extract locations using multiple patterns
+    location_patterns = [
+        # "from X to Y" patterns
+        r'from\s+([^,]+?)\s+to\s+([^,\.\?\!]+)',
+        r'route from\s+([^,]+?)\s+to\s+([^,\.\?\!]+)',
+        r'way from\s+([^,]+?)\s+to\s+([^,\.\?\!]+)',
+        r'navigate from\s+([^,]+?)\s+to\s+([^,\.\?\!]+)',
+        r'go from\s+([^,]+?)\s+to\s+([^,\.\?\!]+)',
+        
+        # "X to Y" patterns
+        r'([^,]+?)\s+to\s+([^,\.\?\!\s]{3,}(?:\s+[^,\.\?\!\s]+)*)',
+        r'between\s+([^,]+?)\s+and\s+([^,\.\?\!]+)',
+    ]
+    
+    for pattern in location_patterns:
+        match = re.search(pattern, query_lower)
+        if match:
+            parsed["origin"] = match.group(1).strip()
+            parsed["destination"] = match.group(2).strip()
+            break
+    
+    # Clean up location names
+    for key in ["origin", "destination"]:
+        if parsed[key]:
+            # Remove common words that might have been captured
+            parsed[key] = re.sub(r'\b(at|in|the|a|an|by|via|using|with)\b\s*', '', parsed[key])
+            parsed[key] = parsed[key].strip()
+    
+    return parsed
+
+@mcp.tool()
+@tool_logger
+async def smart_navigation_search(
+    query: Annotated[str, Field(description="Natural language navigation query like 'Safe walking route from Eiffel Tower to Louvre at 9 PM'")]
+) -> dict:
+    """Smart navigation search that understands natural language queries and provides safety-focused route guidance"""
+    
+    track_tool_usage("smart_navigation_search")
+    
+    try:
+        # Parse the natural language query
+        parsed_params = parse_navigation_query(query)
+        
+        # Check if we have minimum required info
+        if not parsed_params["origin"] or not parsed_params["destination"]:
+            return err("Could not identify both origin and destination from your query. Please specify both locations clearly.")
+        
+        # Call the detailed navigation tool with parsed parameters
+        result = await local_navigation_social_intelligence(
+            origin=parsed_params["origin"],
+            destination=parsed_params["destination"], 
+            mode=parsed_params["mode"],
+            caution_preference=parsed_params["caution_preference"]
+        )
+        
+        if result.get("success"):
+            # Add parsing info and natural language context
+            result["data"]["query_parsed"] = {
+                "original_query": query,
+                "extracted_origin": parsed_params["origin"],
+                "extracted_destination": parsed_params["destination"],
+                "detected_mode": parsed_params["mode"],
+                "detected_time": parsed_params["time_of_day"],
+                "safety_focused": parsed_params["safety_focus"],
+                "caution_level": parsed_params["caution_preference"]
+            }
+            
+            # Add contextual response based on detected parameters
+            context_notes = []
+            if parsed_params["safety_focus"]:
+                context_notes.append("🛡️ Safety-focused route provided based on your request")
+            if parsed_params["time_of_day"]:
+                context_notes.append(f"⏰ Route guidance tailored for {parsed_params['time_of_day']}")
+            if parsed_params["mode"] != "walking":
+                context_notes.append(f"🚗 Optimized for {parsed_params['mode']} travel")
+            
+            result["data"]["context_notes"] = context_notes
+            
+            return result
+        else:
+            return result
+            
+    except Exception as e:
+        print(f"❌ Smart navigation search failed: {str(e)}")
+        return err(f"Smart navigation search failed: {str(e)}")
+
 ## Removed: accent_and_dialect_training (not needed)
 
 ## Removed: two_way_live_voice_interpreter (not needed)
