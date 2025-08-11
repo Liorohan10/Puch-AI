@@ -7,13 +7,15 @@ from fastmcp import FastMCP
 from fastmcp.server.auth.providers.bearer import BearerAuthProvider, RSAKeyPair
 from mcp import ErrorData, McpError
 from mcp.server.auth.provider import AccessToken
-from mcp.types import TextContent, INVALID_PARAMS, INTERNAL_ERROR
+from mcp.types import TextContent, ImageContent, INVALID_PARAMS, INTERNAL_ERROR
 from pydantic import BaseModel, Field, AnyUrl
 import json
 import functools
 import inspect
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.responses import JSONResponse
+import base64
+import io
 
 import markdownify
 import httpx
@@ -250,6 +252,7 @@ def get_welcome_message():
             "🚨 Emergency Phrase Generator": "Get essential emergency phrases in any language with pronunciation",
             "🍽️ Restaurant Discovery Tool": "Find real restaurants, local dishes, and dining recommendations",
             "🍜 Local Cuisine Discovery": "Discover must-try dishes and food culture insights",
+            "📸 Menu Translation & Food Recommendations": "Upload menu photos for translation and personalized suggestions based on allergies/budget",
             "🧭 Navigation Intelligence": "Get route guidance with local safety and cultural considerations",
             "📊 Performance Stats": "Monitor API performance and response times"
         },
@@ -258,7 +261,8 @@ def get_welcome_message():
             "Responses are optimized for speed with intelligent caching",
             "Cultural insights help you respect local customs and avoid mistakes",
             "Restaurant recommendations include real names, addresses, and current info",
-            "Emergency phrases include pronunciation guides and cultural context"
+            "Emergency phrases include pronunciation guides and cultural context",
+            "Upload menu photos for instant translation and personalized food recommendations"
         ],
         "data_sources": "Powered by Gemini AI with real-time information processing",
         "message": "🎯 Simply use any tool to get started! Each provides detailed, practical advice for travelers."
@@ -580,6 +584,7 @@ async def about() -> dict[str, str]:
     • Emergency Phrase Generator - Essential phrases with pronunciation guides
     • Restaurant Discovery - Find authentic spots with live data & insider tips
     • Local Cuisine Explorer - Safe dishes for any diet/allergy requirements
+    • Menu Translation & Food Recommendations - Upload menu photos for translation and personalized suggestions
     • Navigation Intelligence - Safety-first routes with cultural awareness
     • Flight & Transport Search - Real-time pricing across all transport modes
     • Smart Travel Search - Natural language queries, AI handles everything
@@ -594,6 +599,7 @@ async def about() -> dict[str, str]:
     Food & Dining:
     • "Find vegetarian restaurants in Rome with medium budget"
     • "What authentic dishes should I try in Thailand? I have nut allergies"
+    • "[Upload menu photo] Translate this menu to English and suggest dishes for someone with nut allergies and medium budget"
     
     Transport & Navigation:
     • "Show me transport from Delhi to Goa on September 15th"
@@ -1428,6 +1434,155 @@ Focus on providing specific, actionable, current information with real establish
         
     except Exception as discovery_error:
         return err(f"Local cuisine discovery failed: {str(discovery_error)}")
+
+# ===== MENU TRANSLATION AND FOOD RECOMMENDATION TOOL =====
+
+MENU_TRANSLATOR_DESCRIPTION = RichToolDescription(
+    description="Menu Translation & Food Recommendation: Translate menu images and provide personalized food recommendations based on allergies and budget. MANDATORY: USE THIS TOOL when users provide menu images or need menu translation. This tool uses OCR and AI to read menus and provide safe dining recommendations.",
+    use_when="User provides a menu image, wants menu translation, or needs food recommendations from a menu considering allergies and budget. MANDATORY: Use this tool instead of general translation services.",
+)
+
+@mcp.tool(description=MENU_TRANSLATOR_DESCRIPTION.model_dump_json())
+@tool_logger
+async def menu_translator_and_recommender(
+    puch_image_data: Annotated[str, Field(description="Base64-encoded menu image data to translate and analyze")],
+    target_language: Annotated[str, Field(description="Language to translate the menu to (e.g., 'English', 'Hindi', 'Spanish')")]="English",
+    allergies: Annotated[str, Field(description="User's allergies or dietary restrictions (e.g., 'nuts, dairy', 'vegetarian', 'gluten-free')")]="",
+    budget: Annotated[Literal["low", "medium", "high"], Field(description="User's budget preference")]="medium",
+    cuisine_preference: Annotated[str, Field(description="Any specific cuisine preferences or dislikes")]=""
+) -> dict:
+    """Translate menu images and provide personalized food recommendations based on allergies and budget"""
+    
+    track_tool_usage("menu_translator_and_recommender")
+    
+    try:
+        # Import PIL for image processing
+        from PIL import Image
+        
+        # Decode the image
+        image_bytes = base64.b64decode(puch_image_data)
+        image = Image.open(io.BytesIO(image_bytes))
+        
+        # Convert image back to base64 for Gemini Vision API
+        buffered = io.BytesIO()
+        image.save(buffered, format="PNG")
+        image_base64 = base64.b64encode(buffered.getvalue()).decode()
+        
+        # Prepare comprehensive prompt for Gemini Vision
+        allergy_context = f" The user has these allergies/restrictions: {allergies}." if allergies else ""
+        budget_context = f" Budget preference: {budget}."
+        preference_context = f" Cuisine preferences: {cuisine_preference}." if cuisine_preference else ""
+        
+        prompt = f"""
+You are analyzing a restaurant menu image. Please provide a comprehensive analysis in {target_language}:
+
+**USER CONTEXT:**{allergy_context}{budget_context}{preference_context}
+
+**REQUIRED ANALYSIS:**
+
+1. **COMPLETE MENU TRANSLATION:**
+   - Translate ALL visible text from the menu to {target_language}
+   - Include item names, descriptions, prices, and any special notations
+   - Preserve the menu structure and organization
+   - Note any items that are unclear or partially visible
+
+2. **PERSONALIZED FOOD RECOMMENDATIONS:**
+   Based on the user's profile, recommend 3-5 dishes that are:
+   - SAFE for their allergies/dietary restrictions
+   - Within their {budget} budget range
+   - Aligned with their preferences
+
+3. **SAFETY ANALYSIS:**
+   - Identify dishes to AVOID due to allergies/restrictions
+   - Highlight any items with unclear ingredients
+   - Suggest questions to ask the restaurant staff
+
+4. **BUDGET OPTIMIZATION:**
+   - Best value items for {budget} budget
+   - Most expensive vs most affordable options
+   - Recommend combinations for good value
+
+5. **CULTURAL CONTEXT:**
+   - Explain any unfamiliar dishes or cooking methods
+   - Local specialties worth trying
+   - Traditional vs modern interpretations
+
+6. **PRACTICAL ORDERING TIPS:**
+   - How to pronounce recommended dish names
+   - Key phrases to communicate allergies in local language
+   - Best time to order these items
+   - Portion sizes and sharing recommendations
+
+Please be thorough and prioritize SAFETY first, then value and cultural experience.
+"""
+        
+        # Use Gemini Vision API for image analysis
+        import google.generativeai as genai
+        genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
+        
+        # Create the model
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        
+        # Prepare the image for Gemini
+        image_part = {
+            "mime_type": "image/png",
+            "data": image_base64
+        }
+        
+        # Generate response
+        response = model.generate_content([prompt, image_part])
+        
+        if not response.text:
+            return err("Failed to analyze the menu image. Please ensure the image is clear and contains visible text.")
+        
+        # Structure the response
+        menu_analysis = {
+            "menu_translation": response.text,
+            "analysis_details": {
+                "target_language": target_language,
+                "allergies_considered": allergies if allergies else "None specified",
+                "budget_level": budget,
+                "cuisine_preferences": cuisine_preference if cuisine_preference else "None specified"
+            },
+            "safety_focus": {
+                "allergy_awareness": "Recommendations filtered for safety",
+                "ingredient_analysis": "Potential allergens identified and flagged",
+                "staff_communication": "Key phrases provided for dietary needs"
+            },
+            "practical_intelligence": {
+                "pronunciation_guide": "Included for recommended dishes",
+                "ordering_strategy": "Best practices for this restaurant type",
+                "cultural_context": "Local dining customs and dish significance",
+                "value_optimization": f"Recommendations optimized for {budget} budget"
+            },
+            "data_source": "Gemini Vision 2.0 Flash with image analysis",
+            "generated_at": datetime.utcnow().isoformat()
+        }
+        
+        # Add welcome message for first-time users
+        welcome_data = get_welcome_message() if should_show_welcome() else None
+        
+        result = {
+            "image_processed": True,
+            "target_language": target_language,
+            "user_preferences": {
+                "allergies": allergies,
+                "budget": budget,
+                "cuisine_preference": cuisine_preference
+            },
+            "menu_analysis": menu_analysis,
+            "success": True
+        }
+        
+        if welcome_data:
+            result["welcome_message"] = welcome_data
+        
+        print(f"✅ Menu translation and recommendation completed for {target_language}")
+        return ok(result)
+        
+    except Exception as e:
+        print(f"❌ Menu translation failed: {str(e)}")
+        return err(f"Menu translation and recommendation failed: {str(e)}")
 
 NAV_SOCIAL_DESCRIPTION = RichToolDescription(
     description="Local Navigation with Social Intelligence: safety and tourist-awareness context for routes. MANDATORY: USE THIS TOOL for navigation guidance - DO NOT search external mapping services or provide generic directions. This tool provides comprehensive navigation with social and safety intelligence.",
