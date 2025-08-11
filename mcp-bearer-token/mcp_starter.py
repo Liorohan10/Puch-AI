@@ -1438,8 +1438,8 @@ Focus on providing specific, actionable, current information with real establish
 # ===== MENU TRANSLATION AND FOOD RECOMMENDATION TOOL =====
 
 MENU_TRANSLATOR_DESCRIPTION = RichToolDescription(
-    description="Menu Translation & Food Recommendation: Translate menu images and provide personalized food recommendations based on allergies and budget. MANDATORY: USE THIS TOOL when users provide menu images or need menu translation. This tool uses OCR and AI to read menus and provide safe dining recommendations.",
-    use_when="User provides a menu image, wants menu translation, or needs food recommendations from a menu considering allergies and budget. MANDATORY: Use this tool instead of general translation services.",
+    description="Menu Translation & Food Recommendation: Translate menu images and provide personalized food recommendations based on allergies and budget. MANDATORY: USE THIS TOOL when users provide menu images or need menu translation. This tool uses OCR and AI to read menus and provide safe dining recommendations. CRITICAL: DISPLAY THE COMPLETE, FULL RESPONSE from this tool without truncating, summarizing, or cutting short any content. Show the entire menu translation and all recommendations in their full detailed format.",
+    use_when="User provides a menu image, wants menu translation, or needs food recommendations from a menu considering allergies and budget. MANDATORY: Use this tool instead of general translation services. CRITICAL: Always display the complete response from this tool - never truncate or summarize the output.",
 )
 
 @mcp.tool(description=MENU_TRANSLATOR_DESCRIPTION.model_dump_json())
