@@ -622,6 +622,59 @@ async def about() -> dict[str, str]:
         "description": server_description
     }
 
+# --- Tool: Welcome (First-time User Guide) ---
+@mcp.tool
+@tool_logger
+async def welcome() -> str:
+    """Welcome message and quick start guide for new users"""
+    return dedent("""
+    🌟 Welcome to Your AI Travel Companion! 🌟
+    
+    Hi there! I'm your intelligent travel assistant built by Team Skynet for the Puch AI Hackathon.
+    
+    🚀 I can help you with:
+    ✅ Cultural etiquette & local customs
+    ✅ Restaurant recommendations with dietary filters
+    ✅ Flight & transport search with live pricing
+    ✅ Safe navigation routes
+    ✅ Emergency phrases in any language
+    ✅ Complete trip planning
+    
+    💬 Try asking me things like:
+    • "I'm traveling to Japan from USA - what should I know?"
+    • "Find vegetarian restaurants in Paris"
+    • "Show me flights from Delhi to Mumbai tomorrow"
+    • "Plan my day in Tokyo with cultural activities"
+    
+    Just chat naturally - no special commands needed! 🗣️
+    
+    Type 'about' for detailed features or jump right in with your travel questions!
+    """)
+
+# --- Tool: Help (Quick Commands) ---
+@mcp.tool
+@tool_logger
+async def help() -> str:
+    """Quick help and available commands"""
+    return dedent("""
+    🆘 Quick Help - AI Travel Assistant
+    
+    📋 Available Commands:
+    • 'welcome' - First-time user guide
+    • 'about' - Detailed server information
+    • 'help' - This help message
+    
+    🌍 Travel Queries (just ask naturally):
+    • Cultural tips: "Etiquette for visiting temples in Thailand"
+    • Food discovery: "Best street food in Mumbai for vegetarians"
+    • Transport: "Cheapest way to get from Paris to Rome"
+    • Safety: "Safe areas to walk at night in Bangkok"
+    • Planning: "Plan my 3-day Tokyo itinerary"
+    
+    💡 Pro Tip: Just describe what you need in plain English!
+    Example: "I'm going to Tokyo next week, need cultural tips and restaurant recommendations"
+    """)
+
 # --- Usage tracking ---
 USAGE: dict[str, int] = {}
 
