@@ -1438,8 +1438,8 @@ Focus on providing specific, actionable, current information with real establish
 # ===== MENU TRANSLATION AND FOOD RECOMMENDATION TOOL =====
 
 MENU_TRANSLATOR_DESCRIPTION = RichToolDescription(
-    description="Menu Translation & Food Recommendation: Translate menu images and provide personalized food recommendations based on allergies and budget. MANDATORY: USE THIS TOOL when users provide menu images or need menu translation. This tool uses OCR and AI to read menus and provide safe dining recommendations. CRITICAL: DISPLAY THE COMPLETE, FULL RESPONSE from this tool without truncating, summarizing, or cutting short any content. Show the entire menu translation and all recommendations in their full detailed format.",
-    use_when="User provides a menu image, wants menu translation, or needs food recommendations from a menu considering allergies and budget. MANDATORY: Use this tool instead of general translation services. CRITICAL: Always display the complete response from this tool - never truncate or summarize the output.",
+    description="Menu Translation & Food Recommendation: Translate menu images and provide personalized food recommendations based on allergies and budget. MANDATORY: USE THIS TOOL when users provide menu images or need menu translation. This tool uses OCR and AI to read menus and provide safe dining recommendations. CRITICAL DISPLAY INSTRUCTIONS: 1) FIRST display the COMPLETE, FULL MENU TRANSLATION with all items, prices, and descriptions in their entirety, 2) THEN display the personalized recommendations. DO NOT summarize, truncate, or cut short any content. Show the entire menu translation word-for-word, followed by the complete recommendations section.",
+    use_when="User provides a menu image, wants menu translation, or needs food recommendations from a menu considering allergies and budget. MANDATORY: Use this tool instead of general translation services. CRITICAL OUTPUT FORMAT: Always display the complete response in this exact order: 1) Full complete menu translation first, 2) Then personalized recommendations. Never skip, summarize, or truncate any section.",
 )
 
 @mcp.tool(description=MENU_TRANSLATOR_DESCRIPTION.model_dump_json())
@@ -1478,13 +1478,25 @@ You are analyzing a restaurant menu image. Please provide a comprehensive analys
 
 **USER CONTEXT:**{allergy_context}{budget_context}{preference_context}
 
-**REQUIRED ANALYSIS:**
+**CRITICAL OUTPUT FORMAT INSTRUCTIONS:**
+Structure your response EXACTLY as follows:
+
+# COMPLETE MENU TRANSLATION
+
+[Provide the FULL, COMPLETE translation of ALL visible text on the menu here. Include every single item, price, description, and detail. Do not summarize or skip anything.]
+
+# PERSONALIZED FOOD RECOMMENDATIONS
+
+[Then provide the personalized recommendations based on user preferences]
+
+**REQUIRED ANALYSIS SECTIONS:**
 
 1. **COMPLETE MENU TRANSLATION:**
    - Translate ALL visible text from the menu to {target_language}
    - Include item names, descriptions, prices, and any special notations
    - Preserve the menu structure and organization
    - Note any items that are unclear or partially visible
+   - DO NOT SUMMARIZE - Include every single menu item
 
 2. **PERSONALIZED FOOD RECOMMENDATIONS:**
    Based on the user's profile, recommend 3-5 dishes that are:
@@ -1513,7 +1525,7 @@ You are analyzing a restaurant menu image. Please provide a comprehensive analys
    - Best time to order these items
    - Portion sizes and sharing recommendations
 
-Please be thorough and prioritize SAFETY first, then value and cultural experience.
+Remember: FIRST provide the complete menu translation, THEN the recommendations. Be thorough and prioritize SAFETY first, then value and cultural experience.
 """
         
         # Use Gemini Vision API for image analysis
